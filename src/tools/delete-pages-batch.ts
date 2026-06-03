@@ -1,6 +1,6 @@
 // Tool: webstudio_delete_pages — batch deletion of pages with continue-on-error.
 //
-// Difference vs. webstudio_delete_page: takes an array of pageIds, builds ONE consolidated
+// Takes an array of pageIds, builds ONE consolidated
 // transaction with all valid removals, and pushes it once. Each item is processed
 // independently — a failure on one item (home page, not found, etc.) does NOT abort the
 // whole batch. The response is a structured report (succeeded / failed) per item.

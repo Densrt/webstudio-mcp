@@ -5,6 +5,12 @@ privately before its first public release, so the history below starts at the fi
 public version. Format inspired by [Keep a Changelog](https://keepachangelog.com/),
 versioning per [SemVer](https://semver.org/).
 
+## [2.10.8] — 2026-06-03
+
+- build(release): one-command release-public.sh (dry-run by default)
+- chore(cleanup): drop superseded webstudio_delete_page + fix page-management doc
+- chore(hygiene): remove dead internal residue from the private repo
+
 ## [2.10.7] — 2026-06-03
 
 Polish: removed author-environment paths and internal residue from shipped comments/docs, fixed two stale doc references and the CI branch trigger. No functional or API change.

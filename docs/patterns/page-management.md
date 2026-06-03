@@ -36,7 +36,7 @@ Simple rule: **if the target page should resemble a source page in the same proj
 
 Validated end-to-end 2026-05-08 on project `darktest` (Test Claude MCP):
 - `webstudio_create_page`: page created, version 9→10, status ok
-- `webstudio_delete_page`: page deleted + tree-walker, version 10→11, status ok
+- `webstudio_delete_page` (now `webstudio_delete_pages`): page deleted + tree-walker, version 10→11, status ok
 
 ## Meta format: JS expressions as strings
 
@@ -237,6 +237,6 @@ mcp.webstudio_push_fragment({ ..., pushTo: { projectSlug, parentInstanceId: root
 
 To delete:
 ```ts
-mcp.webstudio_delete_page({ projectSlug, pageId, dryRun: false });
-// Refuses if pageId = home page
+mcp.webstudio_delete_pages({ projectSlug, pageIds: [pageId], dryRun: false });
+// Skips the home page and any not-found page, reporting the reason per item
 ```
