@@ -1,0 +1,63 @@
+{
+  "name": "@densrt/webstudio-mcp",
+  "version": "2.10.6",
+  "description": "Unofficial MCP server for Webstudio Cloud — generate, push, audit, and refactor Webstudio projects programmatically (for AI agents and CLI workflows).",
+  "type": "module",
+  "main": "dist/index.js",
+  "bin": {
+    "webstudio-mcp": "dist/index.js"
+  },
+  "files": [
+    "dist",
+    "docs",
+    "README.md",
+    "LICENSE",
+    "CHANGELOG.md",
+    "SECURITY.md"
+  ],
+  "engines": {
+    "node": ">=18"
+  },
+  "scripts": {
+    "clean": "node scripts/clean.mjs",
+    "build": "npm run clean && tsc",
+    "dev": "node --watch --loader ts-node/esm src/index.ts",
+    "start": "node dist/index.js",
+    "test": "node --test test/*.test.mjs",
+    "bump": "node scripts/bump.mjs",
+    "prepack": "npm run build"
+  },
+  "keywords": [
+    "webstudio",
+    "mcp",
+    "model-context-protocol",
+    "claude",
+    "ai-agent",
+    "no-code",
+    "website-builder",
+    "design-tokens"
+  ],
+  "author": "Denis Siret",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Densrt/webstudio-mcp.git"
+  },
+  "homepage": "https://github.com/Densrt/webstudio-mcp#readme",
+  "bugs": {
+    "url": "https://github.com/Densrt/webstudio-mcp/issues"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.0.0",
+    "nanoid": "^5.0.0",
+    "node-html-parser": "^7.1.0",
+    "playwright-core": "^1.60.0",
+    "zod": "^3.22.0",
+    "zod-to-json-schema": "^3.25.2"
+  },
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "ts-node": "^10.9.2",
+    "typescript": "^5.0.0"
+  }
+}

@@ -1,0 +1,26 @@
+node_modules/
+dist/
+*.tsbuildinfo
+
+# Webstudio Cloud auth (per-project cookies + CSRF tokens — NEVER commit)
+.webstudio-auth.json
+
+# Local project workspaces (tokens.json + auth + generated sections).
+# The MCP defaults to ~/.webstudio-mcp/projects/ — repo-local dirs are
+# scratch space and must never be committed.
+projects/
+
+# Logs
+*.log
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
+
+# Local test outputs
+tmp/
+*.tmp

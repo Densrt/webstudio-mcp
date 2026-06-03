@@ -1,0 +1,325 @@
+// Webstudio Cloud HTTP client — auth + fetch + push wrapper.
+// Reproduces the auth pattern observed from the builder (cookies + csrf + sec-fetch headers).
+
+import type { Instance, Prop, StyleDecl, StyleSource, StyleSourceSelection, Breakpoint } from "./types.js";
+
+export class AuthExpiredError extends Error {
+  constructor(public readonly httpStatus: number) {
+    super(
+      `Webstudio session expired (HTTP ${httpStatus}) — run webstudio_setup_auth again ` +
+        `with the new cookie. appVersion will be auto-fetched if you don't supply one.`,
+    );
+    this.name = "AuthExpiredError";
+  }
+}
+
+/**
+ * Try to extract appVersion (x-webstudio-client-version) from the builder HTML.
+ * Returns the matched string, or null if no marker is present.
+ * Throws on HTTP errors.
+ */
+async function fetchAppVersionViaHtml(projectId: string, cookie: string): Promise<string | null> {
+  const url = `https://p-${projectId}.apps.webstudio.is/`;
+  // redirect:"manual" lets us detect the OAuth-to-login redirect that signals
+  // an expired session. Without it, fetch follows the chain and we'd see a 200
+  // on the /login page, mistaking expired auth for "no marker found".
+  const res = await fetch(url, {
+    redirect: "manual",
+    headers: {
+      Cookie: cookie,
+      "user-agent":
+        "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/147.0.0.0 Safari/537.36",
+    },
+  });
+
+  // 302 → /oauth/ws/authorize or /login means the cookie is no longer valid.
+  if (res.status >= 300 && res.status < 400) {
+    const loc = res.headers.get("location") || "";
+    if (/\/oauth\/|\/login(\?|$)/.test(loc)) {
+      throw new AuthExpiredError(res.status);
+    }
+    throw new Error(
+      `Builder returned unexpected redirect (HTTP ${res.status} → ${loc}). ` +
+        `Provide appVersion manually: F12 → Network → /trpc/... → Headers → x-webstudio-client-version.`,
+    );
+  }
+
+  if (!res.ok) {
+    throw new Error(
+      `Could not fetch builder HTML (HTTP ${res.status}). ` +
+        `Provide appVersion manually: F12 → Network → /trpc/... → Headers → x-webstudio-client-version.`,
+    );
+  }
+  const html = await res.text();
+
+  // Webstudio (Remix) used to expose env vars via window.ENV = { GIT_SHA: "..." }.
+  // As of 2026-05 none of these markers are inlined anymore — kept as a fast path
+  // in case Webstudio re-exposes them.
+  const gitSha = html.match(/GIT_SHA["']?\s*:\s*["']([a-zA-Z0-9_-]{4,64})["']/);
+  if (gitSha) return gitSha[1];
+
+  const clientVersion = html.match(/clientVersion["']?\s*:\s*["']([a-zA-Z0-9_-]{4,64})["']/);
+  if (clientVersion) return clientVersion[1];
+
+  const metaTag = html.match(/name=["']x-webstudio-client-version["'][^>]*content=["']([^"']+)["']/);
+  if (metaTag) return metaTag[1];
+
+  return null;
+}
+
+// Test seam: tests inject a stub here to skip the headless browser.
+// Default is the real Playwright implementation in ./lib/app-version.
+let browserFetcher: ((projectId: string, cookie: string) => Promise<string>) | undefined;
+export function __setBrowserAppVersionFetcher(fn: typeof browserFetcher) {
+  browserFetcher = fn;
+}
+
+/**
+ * Resolve appVersion using a fast-path HTML regex, then fall back to a headless
+ * browser that intercepts the first /trpc/* request of the hydrated builder
+ * (v1.2 — required since Webstudio Cloud stopped inlining the version in HTML).
+ * Throws with explicit F12 instructions if both routes fail.
+ */
+export async function fetchAppVersion(projectId: string, cookie: string): Promise<string> {
+  let htmlErr: unknown;
+  try {
+    const v = await fetchAppVersionViaHtml(projectId, cookie);
+    if (v) return v;
+  } catch (e) {
+    // Auth-expired is terminal — no point trying the browser, it'll just land
+    // on the same /login page. Surface immediately so the user knows to re-auth.
+    if (e instanceof AuthExpiredError) throw e;
+    htmlErr = e;
+  }
+
+  try {
+    const fn = browserFetcher ?? (await import("./lib/app-version.js")).fetchAppVersionViaBrowser;
+    return await fn(projectId, cookie);
+  } catch (browserErr) {
+    if (browserErr instanceof AuthExpiredError) throw browserErr;
+    const browserMsg = browserErr instanceof Error ? browserErr.message : String(browserErr);
+    const htmlMsg = htmlErr instanceof Error ? htmlErr.message : "no marker found in HTML";
+    throw new Error(
+      `appVersion auto-fetch failed. ` +
+        `HTML regex: ${htmlMsg}. ` +
+        `Headless browser: ${browserMsg}. ` +
+        `Get it manually: F12 → Network → /trpc/... → Headers → x-webstudio-client-version, ` +
+        `then call webstudio_update_app_version({projectSlug, appVersion}).`,
+    );
+  }
+}
+
+export type WebstudioConfig = {
+  projectId: string;
+  cookie: string;       // Full Cookie header (session + csrf cookies concatenated).
+  csrfToken: string;    // x-csrf-token (extracted from the __Host-_csrf_1 cookie).
+  appVersion: string;   // x-webstudio-client-version (server build hash).
+  /**
+   * Explicit allow-list: as long as `allowPush !== true`, the push tool refuses.
+   * The session cookie is bound to the Webstudio user (not a project) → it grants access
+   * to ALL projects on the account. allowPush prevents accidental pushes to the wrong project.
+   */
+  allowPush?: boolean;
+};
+
+export type WebstudioBuild = {
+  id: string;
+  projectId: string;
+  version: number;
+  createdAt: string;
+  updatedAt: string;
+  pages: {
+    homePageId: string;
+    rootFolderId: string;
+    pages: Array<{ id: string; name: string; path: string; rootInstanceId: string; title?: string; meta?: Record<string, unknown> }>;
+    folders: unknown[];
+  };
+  breakpoints: Breakpoint[];
+  instances: Instance[];
+  props: Prop[];
+  styles: StyleDecl[];
+  styleSources: StyleSource[];
+  styleSourceSelections: StyleSourceSelection[];
+  dataSources: unknown[];
+  resources: unknown[];
+  assets: unknown[];
+  marketplaceProduct: unknown;
+  project?: { id?: string; title?: string; domain?: string; [key: string]: unknown };
+  publisherHost?: string;
+};
+
+export type BuildPatchOperation = {
+  op: "add" | "replace" | "remove";
+  path: Array<string | number>;
+  value?: unknown;
+};
+
+export type BuildPatchChange = {
+  namespace: string;
+  patches: BuildPatchOperation[];
+};
+
+export type BuildPatchTransaction = {
+  id: string;
+  payload: BuildPatchChange[];
+};
+
+export type PatchResult =
+  | { status: "ok"; version: number; entries: Array<{ transactionId: string; status: string }> }
+  | { status: "partial"; version: number; entries: unknown[] }
+  | { status: "version_mismatched"; errors: string }
+  | { status: "authorization_error" | "error"; errors: string };
+
+export function origin(projectId: string): string {
+  return `https://p-${projectId}.apps.webstudio.is`;
+}
+
+export function commonHeaders(config: WebstudioConfig, withContent = false): Record<string, string> {
+  const headers: Record<string, string> = {
+    Cookie: config.cookie,
+    "x-csrf-token": config.csrfToken,
+    "x-webstudio-client": "browser",
+    "x-webstudio-client-version": config.appVersion,
+    "sec-fetch-mode": "cors",
+    "sec-fetch-site": "same-origin",
+    "sec-fetch-dest": "empty",
+    Referer: `${origin(config.projectId)}/`,
+    "user-agent":
+      "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/147.0.0.0 Safari/537.36",
+  };
+  if (withContent) {
+    headers["Content-Type"] = "application/json";
+    headers["Origin"] = origin(config.projectId);
+  }
+  return headers;
+}
+
+// HTTP timeout in ms applied to every Webstudio Cloud call. 15s is generous for normal
+// requests but caps hung connections (CDN issue, server hot reload) that would otherwise
+// block a tool call indefinitely.
+const HTTP_TIMEOUT_MS = 15_000;
+
+export async function fetchBuild(config: WebstudioConfig): Promise<WebstudioBuild> {
+  const url = `${origin(config.projectId)}/rest/data/${config.projectId}`;
+  const res = await fetch(url, {
+    headers: commonHeaders(config),
+    signal: AbortSignal.timeout(HTTP_TIMEOUT_MS),
+  });
+  if (res.status === 401 || res.status === 403) throw new AuthExpiredError(res.status);
+  if (!res.ok) {
+    throw new Error(`fetchBuild failed: ${res.status} — ${(await res.text()).slice(0, 300)}`);
+  }
+  return (await res.json()) as WebstudioBuild;
+}
+
+export async function applyTransaction(
+  config: WebstudioConfig,
+  buildId: string,
+  version: number,
+  transaction: BuildPatchTransaction,
+): Promise<PatchResult> {
+  const url = `${origin(config.projectId)}/trpc/build.patch?batch=1`;
+  const body = JSON.stringify({
+    "0": {
+      source: "browser",
+      appVersion: config.appVersion,
+      buildId,
+      projectId: config.projectId,
+      version,
+      entries: [{ transaction }],
+    },
+  });
+  const res = await fetch(url, {
+    method: "POST",
+    headers: commonHeaders(config, true),
+    body,
+    signal: AbortSignal.timeout(HTTP_TIMEOUT_MS),
+  });
+  if (res.status === 401 || res.status === 403) throw new AuthExpiredError(res.status);
+  if (!res.ok) {
+    throw new Error(`applyTransaction failed: ${res.status} — ${(await res.text()).slice(0, 500)}`);
+  }
+  const json = (await res.json()) as Array<{ result: { data: PatchResult } } | { error: unknown }>;
+  const first = json[0];
+  if ("error" in first) {
+    throw new Error(`tRPC error: ${JSON.stringify(first.error)}`);
+  }
+  return first.result.data;
+}
+
+/**
+ * High-level helper: push a transaction with auto-retry on version_mismatched (max 3).
+ *
+ * Strategy:
+ * 1. Fetch build → regenerate → apply
+ * 2. On version_mismatched: retry (the build changed between fetch and apply)
+ * 3. If the error mentions appVersion OR after one failed retry → automatically refresh
+ *    config.appVersion (mutated in place) and try again.
+ *    Saves users from re-running setup_auth manually after every Webstudio deploy.
+ *
+ * `appVersionUpdated` is exposed so tools can persist the new version to the auth file
+ * (otherwise the refresh is lost on the next run).
+ */
+export async function pushWithRetry(
+  config: WebstudioConfig,
+  regenerate: (build: WebstudioBuild) => BuildPatchTransaction,
+  maxRetries = 3,
+): Promise<{ result: PatchResult; finalVersion: number; appVersionUpdated?: string }> {
+  let lastError: string | undefined;
+  let appVersionRefreshed = false;
+  let updatedAppVersion: string | undefined;
+
+  const tryRefreshAppVersion = async (): Promise<boolean> => {
+    if (appVersionRefreshed) return false;
+    appVersionRefreshed = true;
+    try {
+      const fresh = await fetchAppVersion(config.projectId, config.cookie);
+      if (fresh !== config.appVersion) {
+        config.appVersion = fresh;
+        updatedAppVersion = fresh;
+        return true;
+      }
+    } catch (e) {
+      // An expired session means there is no point in pretending this is a
+      // version drift — re-throw so the caller surfaces AUTH_EXPIRED guidance
+      // (re-run setup_auth with a fresh cookie). Other refresh failures stay
+      // best-effort.
+      if (e instanceof AuthExpiredError) throw e;
+    }
+    return false;
+  };
+
+  for (let attempt = 0; attempt < maxRetries; attempt++) {
+    const build = await fetchBuild(config);
+    const transaction = regenerate(build);
+    const result = await applyTransaction(config, build.id, build.version, transaction);
+    if (result.status === "ok" || result.status === "partial") {
+      return { result, finalVersion: result.version, appVersionUpdated: updatedAppVersion };
+    }
+    if (result.status === "version_mismatched") {
+      lastError = result.errors;
+      // Heuristic: if the error mentions appVersion/clientVersion → refresh first.
+      // tryRefreshAppVersion re-throws AuthExpiredError so we bail out of the
+      // retry loop with a clear AUTH_EXPIRED message instead of exhausting all
+      // attempts and reporting a misleading VERSION_MISMATCHED.
+      if (!appVersionRefreshed && /app.{0,5}version|client.{0,5}version/i.test(result.errors)) {
+        await tryRefreshAppVersion();
+      }
+      // On the 2nd failed attempt, try a "preventive" refresh (covers cases where the error
+      // doesn't explicitly mention appVersion but it's still the cause).
+      if (attempt === 1 && !appVersionRefreshed) await tryRefreshAppVersion();
+      continue;
+    }
+    throw new Error(`Push failed: ${result.status} — ${"errors" in result ? result.errors : ""}`);
+  }
+  const versionHint =
+    `\n\nWebstudio has likely deployed a new build and the stored appVersion is stale.` +
+    `\nAuto-fetch could not recover it (GIT_SHA is no longer inlined in the Webstudio HTML).` +
+    `\n\nTo fix:` +
+    `\n  1. Open the Webstudio builder in your browser (https://apps.webstudio.is/).` +
+    `\n  2. F12 → Network tab → click any /trpc/ request → Request Headers.` +
+    `\n  3. Copy the value of x-webstudio-client-version.` +
+    `\n  4. Run: webstudio_update_app_version({ projectSlug: "...", appVersion: "<copied value>" }).` +
+    `\n  5. Retry the push.`;
+  throw new Error(`Push failed after ${maxRetries} retries (version_mismatched). Last: ${lastError}${versionHint}`);
+}

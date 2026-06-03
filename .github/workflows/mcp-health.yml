@@ -1,0 +1,85 @@
+name: MCP health check
+
+# Enforces the quotas defined in docs/mcp-design-charter.md §5 (v1.0 update).
+# Runs on every PR and push to master. Blocks merge on hard-cap violations.
+
+on:
+  push:
+    branches: [master, main]
+  pull_request:
+    branches: [master, main]
+
+jobs:
+  health:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: "20"
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: TypeScript build
+        run: npm run build
+
+      - name: Run tests
+        run: npm test
+
+      - name: Measure baseline metrics
+        run: node scripts/measure-baseline.mjs | tee baseline.txt
+
+      - name: Quota — mega-tools in manifest <= 22 (Webflow alignment)
+        run: |
+          # Count registered mega-tools by inspecting TOOLS list size at runtime.
+          # The server lists them via tools/list — we use a snapshot approach.
+          # If this grows beyond 22, consolidate before adding (charter §5).
+          COUNT=$(grep -cE "^\s+[a-zA-Z]+Tool[,]?\s*(//.*)?\s*$" src/index.ts || true)
+          echo "Mega-tools registered: $COUNT"
+          if [ "$COUNT" -gt 22 ]; then
+            echo "::error::Mega-tool count $COUNT exceeds hard cap 22. Consolidate before adding."
+            exit 1
+          fi
+
+      - name: Description linter (per-action, v1.0)
+        run: node scripts/lint-descriptions.mjs
+
+      - name: Pattern docs referenced exist
+        run: |
+          # Every pattern:"slug" referenced in src/tools must exist as docs/patterns/slug.md
+          MISSING=0
+          for slug in $(grep -rh 'pattern:"' src/tools/ | grep -oE 'pattern:"[a-z][a-z0-9-]+"' | sed 's/pattern:"//;s/"//' | sort -u); do
+            if [ ! -f "docs/patterns/$slug.md" ]; then
+              echo "::error::Description references pattern:\"$slug\" but docs/patterns/$slug.md does not exist."
+              MISSING=$((MISSING+1))
+            fi
+          done
+          if [ "$MISSING" -gt 0 ]; then exit 1; fi
+          echo "All inline pattern references resolve to existing docs."
+
+      - name: Version consistency (package.json ↔ src/index.ts)
+        run: |
+          PKG=$(node -p "require('./package.json').version")
+          # v1.3 extracted the literal into `const SERVER_VERSION = "..."`.
+          # Fallback to inline `version: "..."` if a future refactor reverts.
+          SRC=$(grep -oE 'SERVER_VERSION = "[^"]+"' src/index.ts | head -1 | grep -oE '"[^"]+"' | tr -d '"')
+          if [ -z "$SRC" ]; then
+            SRC=$(grep -oE 'version: "[^"]+"' src/index.ts | head -1 | grep -oE '"[^"]+"' | tr -d '"')
+          fi
+          echo "package.json: $PKG"
+          echo "src/index.ts: $SRC"
+          if [ "$PKG" != "$SRC" ]; then
+            echo "::error::Version mismatch: package.json=$PKG vs src/index.ts=$SRC. Bump both."
+            exit 1
+          fi
+
+      - name: Upload baseline as artifact
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: baseline-metrics
+          path: baseline.txt
+          retention-days: 30

@@ -1,0 +1,63 @@
+{
+  "_doc": "Webstudio project brand template. Copy this file to ./projects/<slug>-brand.json and fill it in. Then run `/ws-onboard <slug>` for full setup.",
+
+  "projectSlug": "fill-in-kebab-case",
+  "displayName": "Project trade name (for visual confirmation)",
+
+  "webstudio": {
+    "_doc": "Retrieve from the Webstudio builder. projectId = the part after 'p-' in the URL.",
+    "projectId": "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
+  },
+
+  "brand": {
+    "_doc": "Brand style guide. All sub-objects are optional — only include what is defined for the client.",
+
+    "colors": {
+      "_doc": "Hex strings. Short, stable slugs. Generate 'color-<slug>' tokens.",
+      "primary": "#E07B1A",
+      "dark": "#111111",
+      "light": "#F5F5F5",
+      "muted": "#6B7280",
+      "border": "#E5E7EB",
+      "danger": "#DC2626",
+      "success": "#16A34A"
+    },
+
+    "fontSizes": {
+      "_doc": "Values in rem. Generate 'text-<slug>' tokens.",
+      "xs": 0.75,
+      "sm": 0.875,
+      "base": 1,
+      "lg": 1.125,
+      "xl": 1.25,
+      "2xl": 1.5,
+      "3xl": 2,
+      "4xl": 2.5
+    },
+
+    "spacings": {
+      "_doc": "Values in px. Generate 'spacing-<slug>' tokens (padding 4 sides).",
+      "xs": 4,
+      "sm": 8,
+      "md": 16,
+      "lg": 24,
+      "xl": 32,
+      "2xl": 48,
+      "3xl": 64
+    },
+
+    "radii": {
+      "_doc": "Values in px. Generate 'radius-<slug>' tokens (border-radius 4 sides).",
+      "sm": 4,
+      "md": 8,
+      "lg": 16,
+      "full": 9999
+    },
+
+    "fonts": {
+      "_doc": "Arrays of fallbacks. Generate 'font-<slug>' tokens (fontFamily).",
+      "heading": ["Bebas Neue", "sans-serif"],
+      "body": ["Inter", "system-ui", "sans-serif"]
+    }
+  }
+}
