@@ -1,4 +1,4 @@
-// HTML+CSS → WebstudioFragment converter (chantier #5, v1.0).
+// HTML+CSS → WebstudioFragment converter (workstream #5, v1.0).
 //
 // Parses raw HTML markup + CSS rules and produces a WebstudioFragment ready for
 // push_fragment delegation. Aligned with Webflow whtml_builder limits:

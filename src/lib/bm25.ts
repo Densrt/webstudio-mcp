@@ -1,4 +1,4 @@
-// BM25 ranking helper for meta.get_more_tools (chantier #3 v1.1).
+// BM25 ranking helper for meta.get_more_tools (workstream #3 v1.1).
 //
 // Replaces the naive keyword-overlap counter with the canonical Okapi BM25 formula:
 //

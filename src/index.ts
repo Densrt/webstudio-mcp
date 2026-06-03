@@ -53,7 +53,7 @@ import { assetsTool } from "./tools/assets.js";
 // ─── Audit — v1.0 mega-tool (absorbs audit_page in action:"page") ──
 import { auditMegaTool } from "./tools/audit-mega.js";
 
-// ─── CMS — v1.0 mega-tool (Directus adapter, chantier #11) ──
+// ─── CMS — v1.0 mega-tool (Directus adapter, workstream #11) ──
 import { cmsTool } from "./tools/cms-mega.js";
 
 // ─── Project lifecycle (atomic source files — consolidated in projectTool mega-tool) ──
@@ -96,7 +96,7 @@ TOOLS.unshift(makeMetaTool(() => TOOLS));
 const handlers = new Map(TOOLS.map((t) => [t.definition.name, t.handler]));
 
 const SERVER_NAME = "webstudio";
-const SERVER_VERSION = "2.10.6";
+const SERVER_VERSION = "2.10.7";
 
 // MCP `instructions` — sent once at handshake (per the MCP spec, the host can
 // surface these to the model as a system-level preamble). Use it for cross-cutting

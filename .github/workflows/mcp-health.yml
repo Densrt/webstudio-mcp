@@ -1,13 +1,13 @@
 name: MCP health check
 
 # Enforces the quotas defined in docs/mcp-design-charter.md §5 (v1.0 update).
-# Runs on every PR and push to master. Blocks merge on hard-cap violations.
+# Runs on every PR and push to main. Blocks merge on hard-cap violations.
 
 on:
   push:
-    branches: [master, main]
+    branches: [main]
   pull_request:
-    branches: [master, main]
+    branches: [main]
 
 jobs:
   health:

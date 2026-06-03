@@ -5,6 +5,10 @@ privately before its first public release, so the history below starts at the fi
 public version. Format inspired by [Keep a Changelog](https://keepachangelog.com/),
 versioning per [SemVer](https://semver.org/).
 
+## [2.10.7] — 2026-06-03
+
+Polish: removed author-environment paths and internal residue from shipped comments/docs, fixed two stale doc references and the CI branch trigger. No functional or API change.
+
 ## [2.10.6] — 2026-06-03
 
 Initial public release.

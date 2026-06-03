@@ -1,4 +1,4 @@
-// Action label validator (chantier 7, v1.0 prep).
+// Action label validator (workstream 7, v1.0 prep).
 //
 // Each entry in a mega-tool's `actions[]` array MUST carry a `label: string` (3-30 chars,
 // trimmed). The label is echoed back in the response, letting the caller match results to

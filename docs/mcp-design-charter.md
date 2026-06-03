@@ -77,8 +77,7 @@ above that line. Every new tool must justify its existence.
 
 ### 2.2 Description template
 
-The canonical template — every tool follows it, see
-`tasks/description-template-gold.md` for the gold standard:
+The canonical template — every tool follows it:
 
 ```
 Use when: <1 phrase trigger — "when the user asks X" or "before Y">.
@@ -376,11 +375,7 @@ anti-pattern list ([Writing tools for agents][writing-tools]).
 - [Code execution with MCP][code-mcp] — the 150k → 2k token compression
   pattern for multi-MCP setups.
 
-**Internal:**
-- `tasks/description-template-gold.md` — gold-standard examples for every
-  description category.
-- `tasks/mcp-revamp-plan-2026-05-13.md` — the v0.3.0 plan, smells inventory,
-  and forensic of the 10 recurring incidents.
+**In this repo:**
 - `docs/tool-search-config.md` — Tool Search Tool client wiring and the
   `defer_loading` story.
 - `docs/safety.md` — the push protocol in operational detail.

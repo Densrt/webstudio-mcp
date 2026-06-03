@@ -1,4 +1,4 @@
-// CMS adapter interface (chantier #11, v1.0 / v2.1 multi-source).
+// CMS adapter interface (workstream #11, v1.0 / v2.1 multi-source).
 //
 // Schema-agnostic CRUD + schema discovery on a CMS source. v2.1 ships 3 adapters:
 //   - directus (single source, ~/.webstudio-mcp/cms/directus.json)

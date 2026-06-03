@@ -1,4 +1,4 @@
-// Snapshot capture (chantier #4, v1.0).
+// Snapshot capture (workstream #4, v1.0).
 //
 // Implementation of the read.snapshot action — POC validated 2026-05-19
 // (tasks/poc-snapshot-2026-05-19.md). Uses playwright-core to drive the
@@ -6,7 +6,7 @@
 //
 // Architecture:
 //   1. Load auth cookie from ~/.webstudio-mcp/projects/<slug>/webstudio-auth.json
-//   2. Launch headless Chromium (binary from /root/.cache/ms-playwright)
+//   2. Launch headless Chromium (binary from ~/.cache/ms-playwright)
 //   3. Inject cookie scoped to https://p-{projectId}.apps.webstudio.is/
 //   4. Navigate to the builder shell + wait for canvas iframe (URL endsWith /canvas)
 //   5. Dismiss the "Browser not supported" overlay if present
@@ -94,7 +94,7 @@ function parseCookies(cookieHeader: string, builderUrl: string) {
 }
 
 /**
- * Try to find a Playwright-installed chromium binary in /root/.cache/ms-playwright.
+ * Try to find a Playwright-installed chromium binary in ~/.cache/ms-playwright.
  * playwright-core doesn't bundle browsers, so we point to whatever's already there.
  */
 async function findChromiumBinary(): Promise<string | undefined> {

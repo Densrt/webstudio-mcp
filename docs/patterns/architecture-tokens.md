@@ -24,7 +24,7 @@ To industrialize section generation, each project needs a stable **design token 
 ### File structure
 
 ```
-/root/webstudio-mcp/
+webstudio-mcp/
 ├── projects/
 │   ├── {projectSlug}/
 │   │   └── tokens.json        ← project registry

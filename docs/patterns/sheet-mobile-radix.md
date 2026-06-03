@@ -158,7 +158,6 @@ Pattern in the script:
 4. Cleanup transaction BEFORE pushing the new fragment
 5. Re-fetch the build for the new version
 
-Reference file: `/root/webstudio-mcp/generate-sheet-mobile.mjs` (validated v6 version).
 
 ## Bug fixed in the MCP: multi-root push
 

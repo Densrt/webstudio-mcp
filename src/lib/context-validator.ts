@@ -1,4 +1,4 @@
-// Context param validator (chantier 2, v1.0 prep).
+// Context param validator (workstream 2, v1.0 prep).
 //
 // v1.0 mega-tools accept a `context` field (15-25 words, third-person, no PII) that
 // the LLM populates to explain WHY it's calling the tool. The enforcement is tiered:

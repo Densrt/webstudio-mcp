@@ -9,7 +9,7 @@ unmaintainable. The rules below exist to prevent that. Please read them before o
 - **Discuss large changes first.** Open an issue before a new mega-tool or a breaking change.
 - **Keep the surface small.** Every change must fit one of the four tiers below.
 - **No client/personal data.** Examples must use neutral placeholders (`my-site`, `acme`,
-  `cms.example.com`). A CI guard fails the build if a real-looking identifier slips in.
+  `cms.example.com`).
 - **Tests green, no exceptions.** `npm run build && npm test` must pass before you commit.
 
 ## The 4-tier rule (anti-spaghetti grid)

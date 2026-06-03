@@ -5,7 +5,7 @@
 // events are appended one per line to:
 //   1. $WEBSTUDIO_MCP_TELEMETRY_PATH if set (explicit override — recommended
 //      in deployments where the MCP runs under a different user than the one
-//      owning $HOME, e.g. user=claude with HOME=/root on a shared VPS).
+//      owning $HOME).
 //   2. otherwise ~/.webstudio-mcp-telemetry.jsonl (homedir()).
 //
 // Two event families ship in v2.7.4:
@@ -28,7 +28,7 @@ import { join } from "node:path";
 
 let telemetryEnabled = process.env.WEBSTUDIO_MCP_TELEMETRY === "1";
 // Allow an explicit override path via env var — useful when homedir() points at
-// a directory the MCP user cannot write to (e.g. claude user with HOME=/root).
+// a directory the MCP user cannot write to.
 let telemetryLogPath: string | null = telemetryEnabled
   ? (process.env.WEBSTUDIO_MCP_TELEMETRY_PATH?.trim() || join(homedir(), ".webstudio-mcp-telemetry.jsonl"))
   : null;
