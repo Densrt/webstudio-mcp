@@ -16,6 +16,8 @@ import { textResult, errorResult, authErrorResult, runtimeErrorResult } from "./
 import { requireAuth, requirePushAuth } from "../auth.js";
 import { fetchBuild, pushWithRetry } from "../webstudio-client.js";
 import { buildExtractVariantChanges } from "./extract-variant-token/build-patches.js";
+import { resolveStateForWrite } from "../lib/state-whitelist.js";
+import { logCoerce } from "../lib/telemetry.js";
 
 const txId = customAlphabet(
   "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_",
@@ -86,6 +88,18 @@ Example: { projectSlug: "acme", sourceTokenName: "Card Base", instanceIds: ["a",
     if (!parsed.success) return errorResult("VALIDATION_FAILED", `Validation error: ${parsed.error.message}`);
     const data = parsed.data;
 
+    // Normalize `state` to its canonical selector form before matching/writing decls — a bare
+    // "hover" would target (and store) a dead state. Keep the "" convention this path uses for
+    // base. Recoverable forms coerced (hint + telemetry), unrecoverable rejected.
+    // See lib/state-whitelist.ts + pattern state-selector-format.
+    const sr = resolveStateForWrite(data.state);
+    if (!sr.ok) return errorResult("VALIDATION_FAILED", `Invalid state: ${sr.error}`);
+    const vdata = { ...data, state: sr.state ?? "" };
+    if (sr.hint) {
+      void logCoerce(sr.telemetryKey, { source: "tokens.extract_variant", projectSlug: data.projectSlug, from: sr.from, to: vdata.state, reason: sr.reason });
+    }
+    const hintLine = sr.hint ? `\n\n[hints]\n- ${sr.hint}` : "";
+
     let auth;
     try { auth = data.dryRun ? requireAuth(data.projectSlug) : requirePushAuth(data.projectSlug); }
     catch (err) { return authErrorResult(err); }
@@ -95,7 +109,7 @@ Example: { projectSlug: "acme", sourceTokenName: "Card Base", instanceIds: ["a",
     catch (err) { return runtimeErrorResult(err, "fetch build failed"); }
 
     let r;
-    try { r = buildExtractVariantChanges(build, data); }
+    try { r = buildExtractVariantChanges(build, vdata); }
     catch (err) { return mapBuildError((err as Error).message); }
 
     const overridesList = r.extracted.map((o) => `    - ${o.property}${o.state ?? ""} = ${JSON.stringify(o.value)}`).join("\n");
@@ -110,11 +124,11 @@ ${overridesList}
   Styles patches       : ${r.stylePatches.length}
   Selections patches   : ${r.selectionPatches.length}`;
 
-    if (data.dryRun) return textResult(`DRY-RUN extract_variant_token\n\n${summary}\n\nIf OK, re-run with dryRun=false.`);
+    if (data.dryRun) return textResult(`DRY-RUN extract_variant_token\n\n${summary}\n\nIf OK, re-run with dryRun=false.${hintLine}`);
 
     try {
       const { result, finalVersion } = await pushWithRetry(auth, (cur) => {
-        const re = buildExtractVariantChanges(cur, data);
+        const re = buildExtractVariantChanges(cur, vdata);
         const payload = [
           { namespace: "styleSources" as const, patches: re.styleSourcePatches },
           { namespace: "styles" as const, patches: re.stylePatches },
@@ -122,7 +136,7 @@ ${overridesList}
         ];
         return { id: `mcp-extract-variant-${txId()}`, payload };
       });
-      return textResult(`Variant token extracted — version → ${finalVersion}\nstatus: ${result.status}\n\n${summary}`);
+      return textResult(`Variant token extracted — version → ${finalVersion}\nstatus: ${result.status}\n\n${summary}${hintLine}`);
     } catch (err) {
       return runtimeErrorResult(err, "Extract failed");
     }

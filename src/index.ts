@@ -96,7 +96,7 @@ TOOLS.unshift(makeMetaTool(() => TOOLS));
 const handlers = new Map(TOOLS.map((t) => [t.definition.name, t.handler]));
 
 const SERVER_NAME = "webstudio";
-const SERVER_VERSION = "2.10.9";
+const SERVER_VERSION = "2.10.10";
 
 // MCP `instructions` — sent once at handshake (per the MCP spec, the host can
 // surface these to the model as a system-level preamble). Use it for cross-cutting

@@ -10,6 +10,7 @@ import { fetchBuild, pushWithRetry } from "../webstudio-client.js";
 import { buildUpdateStylesTransaction, type StyleUpdate } from "./update-styles/build-patches.js";
 import { coerceStyleValue, validateStyleValue, applyListedDefault } from "../lib/style-coerce.js";
 import { expandShorthand, coerceGridChildLonghand, coerceAspectRatio, detectManualSingleCellPattern } from "../lib/expand-shorthand.js";
+import { resolveStateForWrite } from "../lib/state-whitelist.js";
 import { logCoerce } from "../lib/telemetry.js";
 
 const StyleUpdateSchema = z.object({
@@ -97,6 +98,17 @@ Example: { projectSlug: "acme", updates: [{ instanceId: "abc", property: "color"
     // getting wrong". No-op when WEBSTUDIO_MCP_TELEMETRY≠1.
     const telemetryEvents: Array<{ key: string; extra?: Record<string, unknown> }> = [];
     for (const u of updates) {
+      // Normalize `state` to its canonical selector form (":hover", "::before"): a bare
+      // "hover" would be stored as a dead state that never triggers. Recoverable forms are
+      // coerced (hint + telemetry), unrecoverable ones rejected. See lib/state-whitelist.ts.
+      const sr = resolveStateForWrite(u.state);
+      if (!sr.ok) {
+        return errorResult("VALIDATION_FAILED", `Invalid state on instance ${u.instanceId}: ${sr.error}`);
+      }
+      if (sr.hint) {
+        coerceHints.push(sr.hint);
+        telemetryEvents.push({ key: sr.telemetryKey, extra: { source: "styles.update", projectSlug, instanceId: u.instanceId, from: sr.from, to: sr.state, reason: sr.reason } });
+      }
       let exp = expandShorthand(u.property, u.value as never);
       if (exp.kind === "passthrough") {
         exp = coerceGridChildLonghand(u.property, u.value as never);
@@ -109,14 +121,14 @@ Example: { projectSlug: "acme", updates: [{ instanceId: "abc", property: "color"
       }
       if (exp.kind === "ok") {
         for (const d of exp.decls) {
-          expandedUpdates.push({ ...u, property: d.property, value: d.value as never });
+          expandedUpdates.push({ ...u, state: sr.state, property: d.property, value: d.value as never });
         }
         if (exp.hint) coerceHints.push(exp.hint);
         if (exp.telemetryKey) {
           telemetryEvents.push({ key: exp.telemetryKey, extra: { source: "styles.update", projectSlug, property: u.property } });
         }
       } else {
-        expandedUpdates.push(u);
+        expandedUpdates.push({ ...u, state: sr.state });
       }
     }
 

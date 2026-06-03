@@ -45,7 +45,7 @@ Do NOT use when: you want to find a tool by category — use webstudio_index. To
 Returns: full markdown body (architecture, pitfalls, copy-paste recipes) for the requested pattern/tool, OR a ready-to-paste snippet (helper), OR an index of all catalogs if no arg.
 Side effects: none (read-only).
 
-Available pattern slugs (use pattern:"<slug>"): swiper-carousel, sheet-mobile-radix, navigation-menu-radix, hover-cascade-via-css-vars, carousel-scroll-snap, tabs-radix-gotchas, radix-components-reference, architecture-tokens, css-vars-scope, tokens-variants-vs-overrides, variables-and-bindings, resources-http-data, ws-collection-bindings, flexbox-flex-basis-direction-trap, border-color-ui-quirk, ticker-recipe, webstudio-fragment-format, paste-debug-method, webstudio-cloud-auth, page-management, recipes-design-system, fragment-hero, video-component, reset-margins-global, html-embed-css-injection.
+Available pattern slugs (use pattern:"<slug>"): swiper-carousel, sheet-mobile-radix, navigation-menu-radix, hover-cascade-via-css-vars, carousel-scroll-snap, tabs-radix-gotchas, radix-components-reference, architecture-tokens, css-vars-scope, tokens-variants-vs-overrides, variables-and-bindings, resources-http-data, ws-collection-bindings, flexbox-flex-basis-direction-trap, border-color-ui-quirk, ticker-recipe, webstudio-fragment-format, paste-debug-method, webstudio-cloud-auth, page-management, recipes-design-system, fragment-hero, video-component, reset-margins-global, html-embed-css-injection, state-selector-format.
 
 Available helper keys (use helper:"<query>" — substring match): flex, grid, spacing, typo (or font), container (or max-width), responsive (or breakpoint).
 

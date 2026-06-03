@@ -5,6 +5,10 @@ privately before its first public release, so the history below starts at the fi
 public version. Format inspired by [Keep a Changelog](https://keepachangelog.com/),
 versioning per [SemVer](https://semver.org/).
 
+## [2.10.10] — 2026-06-03
+
+- fix(state): coerce the `state` selector on every style write path — a bare `"hover"` (no colon) was stored as a dead state that never triggered; recoverable forms (`"hover"`, `":Hover"`, `":before"`) are now coerced to canonical + hinted, unknown states rejected. New pattern `state-selector-format`.
+
 ## [2.10.9] — 2026-06-03
 
 - docs(patterns): fix Image.src asset-only myth + add image-component recipe

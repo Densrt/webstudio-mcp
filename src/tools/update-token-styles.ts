@@ -21,7 +21,8 @@ import type { StyleDecl, StyleValue } from "../types.js";
 import { coerceStyleValue, completeTransitionAnimationLonghands, validateStyleValue, applyListedDefault } from "../lib/style-coerce.js";
 import { expandShorthand } from "../lib/expand-shorthand.js";
 import { normalizeStyleValue } from "../lib/style-normalize.js";
-import { stateMatches } from "../lib/state-whitelist.js";
+import { stateMatches, resolveStateForWrite } from "../lib/state-whitelist.js";
+import { logCoerce } from "../lib/telemetry.js";
 import { customAlphabet } from "nanoid";
 
 const txId = customAlphabet("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_", 21);
@@ -231,11 +232,26 @@ Example: { projectSlug: "acme", tokenName: "Color Primary", updates: [{ property
 
     // Pre-flight: refuse shadow values that Webstudio Cloud silently drops
     // (e.g. boxShadow={type:"unparsed", value:"var(--xxx)"}). See lib/style-coerce.ts.
+    // Also normalize each `state` to its canonical selector form (":hover", "::before"):
+    // a bare "hover" would otherwise be stored as a dead state that never triggers at
+    // runtime. Recoverable forms are coerced + a hint surfaced; unrecoverable ones are
+    // rejected. See lib/state-whitelist.ts + pattern state-selector-format.
+    const normalizedUpdates: typeof updates = [];
+    const stateHints: string[] = [];
     for (const u of updates) {
       const verr = validateStyleValue(u.property, u.value as never);
       if (verr) {
         return errorResult("VALIDATION_FAILED", `Invalid style value on property ${u.property}: ${verr}`);
       }
+      const sr = resolveStateForWrite(u.state);
+      if (!sr.ok) {
+        return errorResult("VALIDATION_FAILED", `Invalid state on property ${u.property}: ${sr.error}`);
+      }
+      if (sr.hint) {
+        stateHints.push(sr.hint);
+        void logCoerce(sr.telemetryKey, { source: "tokens.update_token_styles", projectSlug, property: u.property, from: sr.from, to: sr.state, reason: sr.reason });
+      }
+      normalizedUpdates.push({ ...u, state: sr.state });
     }
 
     let auth;
@@ -256,8 +272,12 @@ Example: { projectSlug: "acme", tokenName: "Color Primary", updates: [{ property
       );
     }
 
-    const tx = buildUpdateTransaction(build, token.id, updates);
+    const tx = buildUpdateTransaction(build, token.id, normalizedUpdates);
     const patchCount = tx.transaction.payload[0]?.patches.length ?? 0;
+    const dedupedHints = [...new Set(stateHints)];
+    const hintBlock = dedupedHints.length > 0
+      ? `\n\n[hints]\n${dedupedHints.map((h) => `- ${h}`).join("\n")}`
+      : "";
 
     if (patchCount === 0) {
       const hasFailure = tx.details.some((d) => d.startsWith("!"));
@@ -269,16 +289,16 @@ Example: { projectSlug: "acme", tokenName: "Color Primary", updates: [{ property
 
     if (dryRun) {
       return textResult(
-        `DRY-RUN update_token_styles\n\nToken: "${token.name}" [${token.id}]\n\n${patchCount} patch(es) over ${updates.length} update(s):\n${tx.details.join("\n")}\n\nIf OK, re-run with dryRun=false.`,
+        `DRY-RUN update_token_styles\n\nToken: "${token.name}" [${token.id}]\n\n${patchCount} patch(es) over ${updates.length} update(s):\n${tx.details.join("\n")}\n\nIf OK, re-run with dryRun=false.${hintBlock}`,
       );
     }
 
     try {
       const { result, finalVersion } = await pushWithRetry(auth, (cur) =>
-        buildUpdateTransaction(cur, token.id, updates).transaction,
+        buildUpdateTransaction(cur, token.id, normalizedUpdates).transaction,
       );
       return textResult(
-        `Token "${token.name}" updated — version → ${finalVersion}\nstatus: ${result.status}\n\n${patchCount} decl(s) applied:\n${tx.details.join("\n")}`,
+        `Token "${token.name}" updated — version → ${finalVersion}\nstatus: ${result.status}\n\n${patchCount} decl(s) applied:\n${tx.details.join("\n")}${hintBlock}`,
       );
     } catch (err) {
       return runtimeErrorResult(err, "Push failed");

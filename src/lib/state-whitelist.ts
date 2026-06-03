@@ -292,3 +292,57 @@ export function stateMatches(stored: string | undefined, query: string | undefin
 export function isValidState(raw: string | undefined): boolean {
   return normalizeState(raw).isValid;
 }
+
+/**
+ * Outcome of resolving a caller-supplied `state` for a WRITE path.
+ *
+ * Discriminated on `ok`:
+ * - `ok:false` → the input is an unrecoverable selector (e.g. ":fake-state"); the
+ *   write path must reject with `error` instead of silently storing a dead state.
+ * - `ok:true`  → use `state` (canonical form, `undefined` = base). When `hint` is
+ *   present the input was a RECOVERABLE non-canonical form (e.g. "hover" → ":hover",
+ *   ":before" → "::before") that we coerced: the caller surfaces `hint` to the user
+ *   and emits `logCoerce(telemetryKey, { source, projectSlug, from, to: state, reason })`.
+ */
+export type StateForWrite =
+  | { ok: false; error: string }
+  // Valid / base: passthrough, no coercion. `hint` absent (the discriminant).
+  | { ok: true; state: string | undefined; hint?: undefined; telemetryKey?: undefined; from?: undefined; reason?: undefined }
+  // Recoverable: coerced to canonical — `hint`/`telemetryKey` guaranteed present so
+  // `if (res.hint)` narrows them to non-undefined at the call site.
+  | { ok: true; state: string; hint: string; telemetryKey: string; from: string; reason: string };
+
+/**
+ * Normalize a caller-supplied `state` at a style WRITE boundary.
+ *
+ * Wraps `normalizeState` with the repo's coerce-vs-reject convention so every write
+ * path (update_styles, update_token_styles, buildFromArgs, extract_variant) behaves
+ * identically:
+ * - valid (":hover", "::before", "[...]", base)      → passthrough, no hint.
+ * - recoverable ("hover", ":Hover", ":before", …)    → coerce to canonical + hint + telemetryKey.
+ * - unrecoverable (":fake-state", "zzz", "::hover" w/ no element match) → { ok:false, error }.
+ *
+ * Cas réel (2026-06): `tokens.update_token_styles` accepted `state:"hover"` (no colon)
+ * verbatim and stored a dead state that never triggered at runtime — zero warning.
+ * The brick (`normalizeState`) already existed but was never called on write paths.
+ */
+export function resolveStateForWrite(raw: string | undefined): StateForWrite {
+  const ns = normalizeState(raw);
+  if (ns.isValid) {
+    return { ok: true, state: ns.canonical };
+  }
+  const from = (raw ?? "").trim();
+  // Recoverable: normalizeState found a canonical form despite the bad input.
+  if (ns.canonical !== undefined) {
+    return {
+      ok: true,
+      state: ns.canonical,
+      from,
+      reason: ns.reason ?? "",
+      telemetryKey: "coerce:stateSelector",
+      hint: `state "${from}" normalized to "${ns.canonical}" (${ns.reason}). Webstudio stores states as selectors WITH a leading colon (":hover", "::before", "[data-state=open]"); a bare "${from}" is a dead state that never matches at runtime. See pattern state-selector-format.`,
+    };
+  }
+  // Unrecoverable: reject explicitly rather than store a state that will never fire.
+  return { ok: false, error: `invalid state "${from}": ${ns.reason}` };
+}

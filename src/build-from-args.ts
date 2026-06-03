@@ -10,6 +10,7 @@ import {
   completeTransitionAnimationLonghands,
 } from "./lib/style-coerce.js";
 import { expandShorthand } from "./lib/expand-shorthand.js";
+import { resolveStateForWrite } from "./lib/state-whitelist.js";
 import { logCoerce } from "./lib/telemetry.js";
 
 const TRANSITION_LONGHANDS_SET = new Set<string>([
@@ -189,6 +190,18 @@ export function buildFromArgs(args: BuildArgs): FragmentBuilder {
   };
   const collected: CollectedDecl[] = [];
   for (const style of styles) {
+    // Normalize `state` to its canonical selector form (":hover", "::before"): a bare
+    // "hover" would be stored as a dead state that never triggers at runtime. Recoverable
+    // forms are coerced (telemetry only — parity with the longhand completer below, no
+    // textual hint is threaded out of this pure builder); unrecoverable ones throw.
+    // See lib/state-whitelist.ts + pattern state-selector-format.
+    const sr = resolveStateForWrite(style.state);
+    if (!sr.ok) {
+      throw new Error(`Invalid state on ${style.instanceId}.${style.property}: ${sr.error}`);
+    }
+    if (sr.hint) {
+      void logCoerce(sr.telemetryKey, { source: "build.from_args", instanceId: style.instanceId, property: style.property, from: sr.from, to: sr.state, reason: sr.reason });
+    }
     // Pre-flight: expand CSS shorthands (flex, padding, margin, ...) into longhand decls.
     // Shorthand-as-unparsed crashes Webstudio at publish time. See lib/expand-shorthand.ts.
     const exp = expandShorthand(style.property, style.value as StyleValue);
@@ -209,7 +222,7 @@ export function buildFromArgs(args: BuildArgs): FragmentBuilder {
       collected.push({
         instanceId: style.instanceId,
         breakpoint: (style.breakpoint ?? "base") as BreakpointId,
-        state: style.state,
+        state: sr.state,
         property: d.property,
         value: coercedValue,
         listed: applyListedDefault(d.property, style.listed),

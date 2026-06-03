@@ -1,6 +1,6 @@
 {
   "name": "@densrt/webstudio-mcp",
-  "version": "2.10.9",
+  "version": "2.10.10",
   "description": "Unofficial MCP server for Webstudio Cloud — generate, push, audit, and refactor Webstudio projects programmatically (for AI agents and CLI workflows).",
   "type": "module",
   "main": "dist/index.js",

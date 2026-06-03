@@ -4,7 +4,7 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { normalizeState, stateMatches, isValidState } from "../dist/lib/state-whitelist.js";
+import { normalizeState, stateMatches, isValidState, resolveStateForWrite } from "../dist/lib/state-whitelist.js";
 
 // ─── normalizeState — base/empty ───────────────────────────────────────────
 
@@ -182,4 +182,84 @@ test("isValidState: returns boolean shorthand", () => {
   assert.equal(isValidState(":hover"), true);
   assert.equal(isValidState("::hover"), false);
   assert.equal(isValidState("hover"), false);
+});
+
+// ─── resolveStateForWrite — write-boundary coerce-vs-reject ─────────────────
+
+test("resolveStateForWrite: undefined → base, no hint", () => {
+  const r = resolveStateForWrite(undefined);
+  assert.equal(r.ok, true);
+  assert.equal(r.state, undefined);
+  assert.equal(r.hint, undefined);
+});
+
+test("resolveStateForWrite: empty string → base, no hint", () => {
+  const r = resolveStateForWrite("");
+  assert.equal(r.ok, true);
+  assert.equal(r.state, undefined);
+  assert.equal(r.hint, undefined);
+});
+
+test("resolveStateForWrite: :hover passthrough, no hint", () => {
+  const r = resolveStateForWrite(":hover");
+  assert.equal(r.ok, true);
+  assert.equal(r.state, ":hover");
+  assert.equal(r.hint, undefined);
+  assert.equal(r.telemetryKey, undefined);
+});
+
+test("resolveStateForWrite: ::before passthrough, no hint", () => {
+  const r = resolveStateForWrite("::before");
+  assert.equal(r.ok, true);
+  assert.equal(r.state, "::before");
+  assert.equal(r.hint, undefined);
+});
+
+test("resolveStateForWrite: attribute selector passthrough", () => {
+  const r = resolveStateForWrite("[data-state=open]");
+  assert.equal(r.ok, true);
+  assert.equal(r.state, "[data-state=open]");
+  assert.equal(r.hint, undefined);
+});
+
+test("resolveStateForWrite: bare 'hover' coerced → :hover with hint + telemetryKey", () => {
+  const r = resolveStateForWrite("hover");
+  assert.equal(r.ok, true);
+  assert.equal(r.state, ":hover");
+  assert.equal(r.from, "hover");
+  assert.equal(r.telemetryKey, "coerce:stateSelector");
+  assert.ok(r.hint && r.hint.includes(":hover"));
+});
+
+test("resolveStateForWrite: ':Hover' wrong case coerced → :hover", () => {
+  const r = resolveStateForWrite(":Hover");
+  assert.equal(r.ok, true);
+  assert.equal(r.state, ":hover");
+  assert.equal(r.telemetryKey, "coerce:stateSelector");
+});
+
+test("resolveStateForWrite: legacy ':before' coerced → ::before", () => {
+  const r = resolveStateForWrite(":before");
+  assert.equal(r.ok, true);
+  assert.equal(r.state, "::before");
+  assert.ok(r.hint);
+});
+
+test("resolveStateForWrite: '::hover' (pseudo-class w/ double colon) coerced → :hover", () => {
+  const r = resolveStateForWrite("::hover");
+  assert.equal(r.ok, true);
+  assert.equal(r.state, ":hover");
+  assert.ok(r.hint);
+});
+
+test("resolveStateForWrite: ':fake-state' unrecoverable → ok:false with error", () => {
+  const r = resolveStateForWrite(":fake-state");
+  assert.equal(r.ok, false);
+  assert.ok(r.error && r.error.includes("invalid state"));
+});
+
+test("resolveStateForWrite: bare 'zzz' unrecoverable → ok:false", () => {
+  const r = resolveStateForWrite("zzz");
+  assert.equal(r.ok, false);
+  assert.ok(r.error);
 });
