@@ -5,6 +5,11 @@ privately before its first public release, so the history below starts at the fi
 public version. Format inspired by [Keep a Changelog](https://keepachangelog.com/),
 versioning per [SemVer](https://semver.org/).
 
+## [2.10.9] — 2026-06-03
+
+- docs(patterns): fix Image.src asset-only myth + add image-component recipe
+- fix(tokens): run full coerce/normalize/complete pipeline on create_tokens
+
 ## [2.10.8] — 2026-06-03
 
 - build(release): one-command release-public.sh (dry-run by default)

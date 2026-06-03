@@ -8,8 +8,10 @@
 
 import { customAlphabet } from "nanoid";
 import type { WebstudioBuild, BuildPatchOperation } from "../../webstudio-client.js";
-import type { StyleValue } from "../../types.js";
+import type { StyleValue, StyleDecl } from "../../types.js";
 import { expandShorthand } from "../../lib/expand-shorthand.js";
+import { coerceStyleValueWithMeta, completeTransitionAnimationLonghands, validateStyleValue } from "../../lib/style-coerce.js";
+import { normalizeStyleValueWithMeta } from "../../lib/style-normalize.js";
 
 const ALPHABET = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
 export const newId = customAlphabet(ALPHABET, 21);
@@ -65,6 +67,9 @@ export function findMissingVarRefs(
   return missing;
 }
 
+/** A silent coercion that fired while normalizing a token's styles (for hint + telemetry). */
+export type TokenCoerceEvent = { key: string; hint?: string; property?: string };
+
 export type BuildTokenPatchesResult = {
   tokenId: string;
   isNew: boolean;
@@ -72,6 +77,7 @@ export type BuildTokenPatchesResult = {
   stylePatches: BuildPatchOperation[];
   addedDecls: string[];
   skippedDecls: string[];
+  coerceEvents: TokenCoerceEvent[];
 };
 
 /**
@@ -101,6 +107,71 @@ export function expandStylesMap(
 }
 
 /**
+ * Apply the same style pipeline as update_token_styles to a token's (already shorthand-expanded)
+ * styles map: coerce (single typed transition/animation longhand → layers[1]) → normalize
+ * (colors to wire format) → complete missing transition/animation longhands against the token's
+ * existing cohort. Pure: returns the final decls plus the silent coercions that fired.
+ *
+ * `existingDecls` is the token's current decls on the same breakpoint+state cohort (empty for a
+ * new token); the completer uses them to pad layers to the right count on overwrite.
+ *
+ * Workstream note: create_tokens previously only expanded shorthands (expandStylesMap), so a token
+ * created with a partial transition (e.g. 3 of 5 longhands as unparsed) was stored as-is — the
+ * Transition panel fell back to `all 0s ease 0s` and the effect did not apply (a production site,
+ * 2026-06-03). This closes the gap so create_tokens matches every other style-writing route.
+ */
+export function normalizeTokenStyles(
+  stylesMap: Record<string, StyleValue>,
+  existingDecls: Pick<StyleDecl, "property" | "value">[],
+): { decls: Record<string, StyleValue>; events: TokenCoerceEvent[]; validationError?: string } {
+  const events: TokenCoerceEvent[] = [];
+
+  // Pass 1 — per decl: pre-flight validate (reject shadow var() the UI drops), then coerce + normalize.
+  const incoming: { property: string; value: StyleValue }[] = [];
+  for (const [property, value] of Object.entries(stylesMap)) {
+    const verr = validateStyleValue(property, value);
+    if (verr) return { decls: {}, events: [], validationError: `property "${property}" — ${verr}` };
+
+    const coerced = coerceStyleValueWithMeta(property, value);
+    if (coerced.telemetryKey) events.push({ key: coerced.telemetryKey, hint: coerced.hint, property });
+
+    const normalized = normalizeStyleValueWithMeta(coerced.value);
+    normalized.meta.telemetryKeys.forEach((key, i) =>
+      events.push({ key, hint: normalized.meta.hints[i], property }),
+    );
+
+    incoming.push({ property, value: normalized.value });
+  }
+
+  // Pass 2 — complete transition/animation longhands across the single (breakpoint, state="") cohort.
+  const completed = completeTransitionAnimationLonghands(existingDecls, incoming);
+  const incomingProps = new Set(incoming.map((d) => d.property));
+  const addedTransition: string[] = [];
+  const addedAnimation: string[] = [];
+  for (const d of completed) {
+    if (incomingProps.has(d.property)) continue;
+    if (d.property.startsWith("transition")) addedTransition.push(d.property);
+    else if (d.property.startsWith("animation")) addedAnimation.push(d.property);
+  }
+  if (addedTransition.length > 0) {
+    events.push({
+      key: "coerce:completeTransitionLonghands",
+      hint: `missing transition longhand(s) ${addedTransition.join(", ")} auto-completed with CSS defaults (ease, 0ms, normal) at matching layer count so the Webstudio Transition panel renders all layers. Push all 5 longhands explicitly to silence this hint.`,
+    });
+  }
+  if (addedAnimation.length > 0) {
+    events.push({
+      key: "coerce:completeAnimationLonghands",
+      hint: `missing animation longhand(s) ${addedAnimation.join(", ")} auto-completed with CSS defaults at matching layer count. Push all 8 longhands explicitly to silence this hint.`,
+    });
+  }
+
+  const decls: Record<string, StyleValue> = {};
+  for (const d of completed) decls[d.property] = d.value;
+  return { decls, events };
+}
+
+/**
  * Compute the patches needed to create a token (or extend an existing one) with the given decls.
  * Pure: no fetch, no push. Caller wires the patches into a transaction.
  *
@@ -115,10 +186,9 @@ export function buildTokenPatches(
     breakpointId: string;
     overwrite: boolean;
   },
-): BuildTokenPatchesResult | { conflict: true; existingId: string } | { shorthandError: string } {
+): BuildTokenPatchesResult | { conflict: true; existingId: string } | { shorthandError: string } | { validationError: string } {
   const expanded = expandStylesMap(args.styles);
   if (!expanded.ok) return { shorthandError: expanded.error };
-  const stylesMap = expanded.styles;
 
   const styleSources = (build.styleSources ?? []) as WsStyleSource[];
   const existing = styleSources.find((s) => s.type === "token" && s.name === args.name);
@@ -141,9 +211,26 @@ export function buildTokenPatches(
     });
   }
 
+  const state = "";
+
+  // Coerce / normalize / complete (parity with update_token_styles). On overwrite, feed the token's
+  // existing decls on this breakpoint+state cohort to the longhand completer so it pads layers to
+  // the right count instead of completing from scratch.
+  const existingDecls = isNew
+    ? []
+    : build.styles
+        .filter((s) =>
+          s.styleSourceId === tokenId &&
+          s.breakpointId === args.breakpointId &&
+          (s.state ?? "") === state,
+        )
+        .map((s) => ({ property: s.property, value: s.value as StyleValue }));
+  const norm = normalizeTokenStyles(expanded.styles, existingDecls);
+  if (norm.validationError) return { validationError: norm.validationError };
+  const stylesMap = norm.decls;
+
   const skippedDecls: string[] = [];
   const addedDecls: string[] = [];
-  const state = "";
 
   for (const [property, value] of Object.entries(stylesMap)) {
     if (!isNew && build.styles.some((s) =>
@@ -168,5 +255,5 @@ export function buildTokenPatches(
     addedDecls.push(property);
   }
 
-  return { tokenId, isNew, styleSourcePatches, stylePatches, addedDecls, skippedDecls };
+  return { tokenId, isNew, styleSourcePatches, stylePatches, addedDecls, skippedDecls, coerceEvents: norm.events };
 }

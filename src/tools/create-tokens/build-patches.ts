@@ -10,6 +10,7 @@ import {
   buildTokenPatches,
   collectKnownCssVars,
   findMissingVarRefs,
+  type TokenCoerceEvent,
 } from "../create-token/shared.js";
 
 export type TokenInput = { name: string; styles: Record<string, StyleValue> };
@@ -32,12 +33,16 @@ export type Succeeded = {
 export type Failed = { name: string; reason: string };
 export type Skipped = { name: string; reason: string };
 
+/** A coerce event tagged with the token it fired on (for hint + telemetry at the handler). */
+export type PlanCoerceEvent = TokenCoerceEvent & { tokenName: string };
+
 export type Plan = {
   styleSourcePatches: BuildPatchOperation[];
   stylePatches: BuildPatchOperation[];
   succeeded: Succeeded[];
   failed: Failed[];
   skipped: Skipped[];
+  coerceEvents: PlanCoerceEvent[];
   abort?: { code: "VALIDATION_FAILED" | "INTERNAL_ERROR"; message: string };
 };
 
@@ -47,6 +52,7 @@ export function planCreateTokens(build: WebstudioBuild, args: PlanArgs): Plan {
   const succeeded: Succeeded[] = [];
   const failed: Failed[] = [];
   const skipped: Skipped[] = [];
+  const coerceEvents: PlanCoerceEvent[] = [];
 
   const bp = build.breakpoints.find(
     (b) => b.label.toLowerCase() === args.breakpoint.toLowerCase() || b.id === args.breakpoint,
@@ -59,6 +65,7 @@ export function planCreateTokens(build: WebstudioBuild, args: PlanArgs): Plan {
       succeeded,
       failed,
       skipped,
+      coerceEvents,
       abort: {
         code: "VALIDATION_FAILED",
         message: `Breakpoint "${args.breakpoint}" not found (available: ${available})`,
@@ -104,6 +111,11 @@ export function planCreateTokens(build: WebstudioBuild, args: PlanArgs): Plan {
       continue;
     }
 
+    if ("validationError" in res) {
+      failed.push({ name: t.name, reason: `invalid style value: ${res.validationError}` });
+      continue;
+    }
+
     if ("conflict" in res) {
       const reason = `token already exists (id=${res.existingId}); pass overwrite=true to extend it`;
       if (args.continueOnError) skipped.push({ name: t.name, reason });
@@ -126,6 +138,7 @@ export function planCreateTokens(build: WebstudioBuild, args: PlanArgs): Plan {
       addedDecls: res.addedDecls.length,
       skippedDecls: res.skippedDecls.length,
     });
+    for (const ev of res.coerceEvents) coerceEvents.push({ ...ev, tokenName: t.name });
 
     if (missing.length > 0) {
       skipped.push({
@@ -137,10 +150,10 @@ export function planCreateTokens(build: WebstudioBuild, args: PlanArgs): Plan {
 
   // continueOnError=false: if anything failed, drop ALL patches.
   if (!args.continueOnError && failed.length > 0) {
-    return { styleSourcePatches: [], stylePatches: [], succeeded: [], failed, skipped };
+    return { styleSourcePatches: [], stylePatches: [], succeeded: [], failed, skipped, coerceEvents: [] };
   }
 
-  return { styleSourcePatches, stylePatches, succeeded, failed, skipped };
+  return { styleSourcePatches, stylePatches, succeeded, failed, skipped, coerceEvents };
 }
 
 export function renderReport(plan: Plan): string {
@@ -157,5 +170,13 @@ export function renderReport(plan: Plan): string {
   lines.push("");
   lines.push(`⏭ Skipped (${plan.skipped.length})`);
   for (const s of plan.skipped) lines.push(`  • "${s.name}" — ${s.reason}`);
+  const hintLines = [...new Set(
+    plan.coerceEvents.filter((ev) => ev.hint).map((ev) => `  • "${ev.tokenName}": ${ev.hint}`),
+  )];
+  if (hintLines.length > 0) {
+    lines.push("");
+    lines.push(`ℹ Normalizations (${hintLines.length})`);
+    lines.push(...hintLines);
+  }
   return lines.join("\n");
 }

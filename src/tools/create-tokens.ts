@@ -19,6 +19,7 @@ import type { WebstudioBuild, BuildPatchTransaction } from "../webstudio-client.
 import type { StyleValue } from "../types.js";
 import { txId } from "./create-token/shared.js";
 import { planCreateTokens, renderReport, type Plan } from "./create-tokens/build-patches.js";
+import { logCoerce } from "../lib/telemetry.js";
 
 const TokenInput = z.object({
   name: z.string(),
@@ -137,6 +138,15 @@ Example: { projectSlug: "acme", tokens: [{ name: "Color Primary", styles: { colo
         const fresh = planCreateTokens(cur, pa);
         return makeTx(fresh);
       });
+      // Telemetry for silent coercions actually committed (no-op when WEBSTUDIO_MCP_TELEMETRY≠1).
+      for (const ev of plan.coerceEvents) {
+        void logCoerce(ev.key, {
+          source: "tokens.create_tokens",
+          projectSlug: data.projectSlug,
+          tokenName: ev.tokenName,
+          ...(ev.property ? { property: ev.property } : {}),
+        });
+      }
       return textResult(
         `Batch create_tokens — version → ${finalVersion}  status: ${result.status}\n\n${renderReport(plan)}`,
       );

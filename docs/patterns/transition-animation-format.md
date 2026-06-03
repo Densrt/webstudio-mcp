@@ -1,9 +1,9 @@
 ---
 name: Transition / animation — layers shape and longhand completion
-description: Webstudio stores transition*/animation* longhands as {type:"layers"} even for a single layer. Single typed values are auto-wrapped; missing longhands are auto-completed with CSS defaults so the Transition / Animation panels render correctly. Covers styles.update, tokens.update_token_styles, build.push_complete (cloudTokens + inline styles), build.push_fragment.
+description: Webstudio stores transition*/animation* longhands as {type:"layers"} even for a single layer. Single typed values are auto-wrapped; missing longhands are auto-completed with CSS defaults so the Transition / Animation panels render correctly. Covers styles.update, tokens.update_token_styles, tokens.create_tokens, build.push_complete (cloudTokens + inline styles), build.push_fragment.
 category: component
 complexity: medium
-lastUpdated: 2026-05-22
+lastUpdated: 2026-06-03
 recommendedTool: styles.update OR tokens.update_token_styles OR build.push_complete
 recommendedToolNote: pass each transition/animation longhand as {type:"layers", value:[...]} so the UI panel decodes it. The server wraps single typed values and completes missing siblings automatically since v2.7.10.
 ---
@@ -80,6 +80,7 @@ N-layers case: if the existing cohort (token / instance / breakpoint / state) al
 |---|---|---|
 | `styles.update` | ✅ via `coerceStyleValue` | ✅ via `completeTransitionAnimationLonghands` (per styleSource+breakpoint+state cohort) |
 | `tokens.update_token_styles` | ✅ | ✅ |
+| `tokens.create_tokens` | ✅ via `coerceStyleValue` | ✅ via `completeTransitionAnimationLonghands` (token cohort; existing decls fed in on overwrite) — since v2.10.9 |
 | `build.push_complete` cloudTokens | ✅ | ✅ |
 | `build.push_complete` inline styles / `build.push_fragment` / `build.build_fragment` | ✅ via `coerceStyleValue` | ✅ via `buildFromArgs` (per instance+breakpoint+state cohort, existing=[]) |
 | `build.push_html` (CSS parser) | ✅ (parser already emits layers) | ✅ (inherited via `buildFromArgs`) |

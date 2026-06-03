@@ -80,9 +80,9 @@ Webstudio "special" components that are NOT `ws:element` (pass-through in the bu
 - `YouTube`, `Vimeo` (not in `COMPONENT_TO_TAG`, already pass-through)
 
 **Consequence for callers of `addInstance("Image", ...)`**:
-- `src` must be of type **`asset`** (assetId sha256), NOT a URL string — otherwise the Webstudio runtime renders nothing.
-- `width` / `height` can also be of type asset (binding to the asset's native dimensions).
-- For a raw `<img>` with a string URL: use `addInstance("ws:element", { tag: "img" })` explicitly.
+- `src` accepts **`asset` | `string` (URL) | `expression`**. Ground truth: Webstudio `packages/sdk-components-react/src/image.ws.ts` declares `src: { type: "string", control: "file" }` — the `"file"` control is only the builder's asset-picker affordance; the stored value is a string. An **asset** id adds the optimization pipeline (srcset, lazy, asset-bound dims); a plain **URL string** and a collection **expression** binding both render fine. (The old "must be asset, otherwise renders nothing" claim was wrong.)
+- `width` / `height` are `type: "number"` (can also bind to an asset's native dimensions).
+- `ws:element` + `tag: "img"` is only for a deliberately raw, unoptimized `<img>` — it is NOT required for URL sources. Prefer the `Image` component. See pattern `image-component`.
 
 Patterns in `src/components/` updated accordingly:
 - `cards.ts`: detects whether `imageSrc` is a URL or an asset id, picks the right component
@@ -230,7 +230,7 @@ ColorValue = {
 
 `number | string | boolean | json | asset | page | string[] | parameter | resource | expression | action | animationAction`
 
-For an image: `src` must be `{ type:"asset", value:"<assetId>" }` (asset present in `assets[]`), NOT a URL string. Acceptable fallback: `ws:element` + `tag:"img"` + string props (loses the optimization).
+For an image: `src` accepts `{ type:"asset", value:"<assetId>" }` (asset present in `assets[]`), a plain URL **string**, or an **expression** (collection binding). The asset form adds Webstudio's optimization (srcset, lazy); a URL string and an expression render fine without it. A raw `ws:element` + `tag:"img"` is only for a deliberately unoptimized `<img>`, not a requirement for URLs. See pattern `image-component`.
 
 ## Builder-side validation (recap)
 
