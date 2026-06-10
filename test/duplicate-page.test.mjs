@@ -16,6 +16,7 @@ const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), "duplicate-page-"));
 process.env.WEBSTUDIO_PROJECTS_DIR = tmpRoot;
 
 const { duplicatePageTool } = await import("../dist/tools/pages/duplicate.js");
+const { invalidateBuildCache } = await import("../dist/webstudio-client.js");
 
 const slug = "testproj";
 const projDir = path.join(tmpRoot, slug);
@@ -68,6 +69,9 @@ function makeBuild() {
 
 const originalFetch = globalThis.fetch;
 function mockPushFlow(build) {
+  // v2.13.0: fetchBuild caches per projectId — each test installs a DIFFERENT
+  // build fixture under the same projectId, so the cache must be dropped here.
+  invalidateBuildCache();
   let buildVersion = build.version;
   let capturedTransactions = [];
   globalThis.fetch = async (url, opts) => {

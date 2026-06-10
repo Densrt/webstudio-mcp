@@ -92,6 +92,7 @@ const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), "audit-delete-safety-"));
 process.env.WEBSTUDIO_PROJECTS_DIR = tmpRoot;
 
 const { deleteResourceTool } = await import("../dist/tools/resources.js");
+const { invalidateBuildCache } = await import("../dist/webstudio-client.js");
 
 const slug = "testproj";
 const projDir = path.join(tmpRoot, slug);
@@ -118,6 +119,9 @@ function makeBuildWithFormAction() {
 
 const originalFetch = globalThis.fetch;
 function mockPush(build) {
+  // v2.13.0: fetchBuild caches per projectId — each test installs a DIFFERENT
+  // build fixture under the same projectId, so the cache must be dropped here.
+  invalidateBuildCache();
   let v = build.version;
   let txs = [];
   globalThis.fetch = async (url, opts) => {

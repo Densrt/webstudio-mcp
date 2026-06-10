@@ -254,7 +254,15 @@ export const getDeclsTool: ToolModule = {
         },
         reports,
       };
-      return textResult(JSON.stringify(payload, null, 2));
+      // MCP structuredContent (spec 2025-06-18): typed clients consume the
+      // payload directly without re-parsing the text block (kept for compat).
+      // Round-tripped through JSON so undefined-valued keys are dropped —
+      // structuredContent must be plain JSON, and both views stay identical.
+      const json = JSON.stringify(payload, null, 2);
+      return {
+        content: [{ type: "text" as const, text: json }],
+        structuredContent: JSON.parse(json) as Record<string, unknown>,
+      };
     }
 
     const text = renderReports(reports, opts);

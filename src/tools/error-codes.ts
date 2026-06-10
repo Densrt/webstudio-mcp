@@ -34,6 +34,7 @@ export const ERROR_CODES = {
   CSS_VAR_NOT_FOUND:   "CSS variable not declared at :root. List via webstudio_css_var.",
   VERSION_MISMATCHED:  "Build version drifted (concurrent edit). Auto-retry will refetch; if persistent, close the builder.",
   VALIDATION_FAILED:   "Input did not match the tool schema. Check argument names and types.",
+  EXPRESSION_INVALID:  "A raw binding expression is not valid/single JavaScript — Webstudio transpiles expressions at publish with the same parser, so it would break the published build. Fix the syntax (one expression, no ';'/',' sequences). Allowlist + parades: see docs/patterns/expression-allowlist.md.",
   CONTEXT_REQUIRED_FOR_CRITICAL: "This action is CRITICAL (destructive at project scale). Provide a 15-25 word third-person `context` summarising why the call is being made (no PII, no secrets).",
   CONTEXT_INVALID_FORMAT: "The `context` field failed format validation. Use 15-25 words, third-person (no I/we/you/my/our/your), no PII (email/IP), no secrets (token/password/api-key).",
   ROOT_FOLDER_PROTECTED: "The project's ROOT folder cannot be deleted (always refused, even with force=true). To clean a project's folder structure, target child folders individually or use pages.delete to remove pages without their parent folder.",

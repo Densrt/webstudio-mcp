@@ -7,6 +7,11 @@ import { BuildFragmentSchema, buildFromArgs } from "../build-from-args.js";
 import { requireAuth, requirePushAuth, saveAuth } from "../auth.js";
 import { fetchBuild, pushWithRetry } from "../webstudio-client.js";
 import { fragmentToTransaction } from "../fragment-to-patches.js";
+import { coerceRawImgInstances } from "../lib/coerce-image-component.js";
+import { coerceRawVideoInstances } from "../lib/coerce-video-component.js";
+import { lintShowBindingProps } from "../lib/lint-show-binding.js";
+import { findReplaceTargets } from "../lib/find-replace-targets.js";
+import { logCoerce } from "../lib/telemetry.js";
 import { buildInstanceRemovalChanges, buildParentChildrenPatch } from "../cleanup-helpers.js";
 import type { BuildPatchTransaction, WebstudioBuild, BuildPatchChange } from "../webstudio-client.js";
 import { assertSafeRadixProp } from "../lib/radix-wrappers.js";
@@ -44,31 +49,6 @@ export const pushFragmentInputSchema = BuildFragmentSchema.extend({
   }).optional(),
 });
 
-function findReplaceTargets(
-  build: WebstudioBuild,
-  parentId: string,
-  labels: string[],
-  componentMatch?: string,
-): string[] {
-  const parent = build.instances.find((i) => i.id === parentId);
-  if (!parent) return [];
-  const labelSet = new Set(labels);
-  const found: string[] = [];
-  for (const c of parent.children) {
-    if (c.type !== "id") continue;
-    const inst = build.instances.find((i) => i.id === c.value);
-    if (!inst || !inst.label || !labelSet.has(inst.label)) continue;
-    if (componentMatch) {
-      const ok = inst.component === componentMatch ||
-        inst.component.endsWith(`:${componentMatch}`) ||
-        inst.component.split(":").pop() === componentMatch;
-      if (!ok) continue;
-    }
-    found.push(inst.id);
-  }
-  return found;
-}
-
 export const pushFragmentTool: ToolModule = {
   definition: {
     name: "webstudio_push_fragment",
@@ -82,6 +62,7 @@ Patterns embedded in fragments — see webstudio_describe_pattern(pattern:"<slug
   - "sheet-mobile-radix" (mobile nav drawer — prefer create_sheet tool)
   - "hover-cascade-via-css-vars" (parent:hover → child styles via --vars)
   - "video-component" (use native Video component, never ws:element tag="video")
+  - "image-component" (native Image — src accepts asset | URL string | expression; raw ws:element tag="img" is auto-converted, coerce:image-component)
   - "ws-collection-bindings" (ws:collection + parameter dataSource via the new dataSources field — push lists with per-item bindings atomically)
 
 Example dry-run: { projectSlug: "acme", pushTo: { projectSlug: "acme", dryRun: true }, instances: [...], replace: { labels: ["HeroSection"] } }
@@ -159,6 +140,31 @@ Example real push (after user confirms project name from dry-run): { projectSlug
       return errorResult("VALIDATION_FAILED", `Build error: ${(err as Error).message}`);
     }
     const fragment = builder.build();
+
+    // Coerce raw <img> instances to the native Image component (v2.18.0 —
+    // see lib/coerce-image-component.ts). Runs BEFORE the Radix prop check
+    // and before any transaction is derived from the fragment.
+    const imgCoerce = coerceRawImgInstances(fragment["@webstudio/instance/v0.1"].instances);
+    if (imgCoerce.count > 0) {
+      void logCoerce(imgCoerce.telemetryKey!, {
+        source: "build.push_fragment",
+        projectSlug: pushTo.projectSlug,
+        count: imgCoerce.count,
+      });
+    }
+    // v2.19.0: raw <video> conversion + iframe video detection + data-ws-show lint.
+    const payload0 = fragment["@webstudio/instance/v0.1"];
+    const videoCoerce = coerceRawVideoInstances(payload0.instances, payload0.props);
+    const showLint = lintShowBindingProps(payload0.props);
+    for (const t of [...videoCoerce.telemetry, ...showLint.telemetry]) {
+      void logCoerce(t.key, { source: "build.push_fragment", projectSlug: pushTo.projectSlug, count: t.count });
+    }
+    const allHints = [
+      ...(imgCoerce.hint ? [imgCoerce.hint] : []),
+      ...videoCoerce.hints,
+      ...showLint.hints,
+    ];
+    const imgHint = allHints.length > 0 ? `\n\n⚠ ${allHints.join("\n⚠ ")}` : "";
 
     // Pre-flight: refuse class/style/id props on Radix non-rendering wrappers
     // inside the fragment. Catches the SPA-navigation cloneElement merge bug
@@ -262,7 +268,7 @@ Fragment: ${insts} instance(s), build version ${build.version}
 Transaction: ${transaction.payload.length} namespaces
 ${summary}
 
-If OK, re-run with dryRun=false (and allowPush=true).`);
+If OK, re-run with dryRun=false (and allowPush=true).${imgHint}`);
     }
 
     try {
@@ -278,7 +284,7 @@ If OK, re-run with dryRun=false (and allowPush=true).`);
       const refreshMsg = appVersionUpdated ? `\nappVersion auto-refreshed → ${appVersionUpdated.slice(0, 12)}…` : "";
       return textResult(`Fragment pushed to "${projectTitle}" (slug: ${pushTo.projectSlug})${replaceMsg}
 ${insts} instance(s) — version → ${finalVersion}
-status: ${result.status}${refreshMsg}`);
+status: ${result.status}${refreshMsg}${imgHint}`);
     } catch (err) {
       return runtimeErrorResult(err, "Push failed");
     }

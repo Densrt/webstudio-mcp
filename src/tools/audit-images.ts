@@ -150,6 +150,21 @@ function auditPage(build: WebstudioBuild, page: WebstudioBuild["pages"]["pages"]
         hasWidth: ps?.has("width") === true,
         hasHeight: ps?.has("height") === true,
       });
+    } else if (inst.component === "ws:element" && (inst as { tag?: string }).tag === "img") {
+      // Legacy raw <img> instance (pre-v2.18.0 — push paths now auto-convert
+      // these to Image). Invisible to the Image checks above, so surface it
+      // here with a migration nudge.
+      const ps = propsIdx.get(inst.id);
+      rawImgs.push({
+        instanceId: inst.id,
+        component: "ws:element",
+        label: inst.label,
+        src: readStringProp(ps, "src") ?? "(no src)",
+        loading: readStringProp(ps, "loading"),
+        hasWidth: ps?.has("width") === true,
+        hasHeight: ps?.has("height") === true,
+        snippet: `ws:element tag="img" — legacy, convert to the native Image component (pattern image-component)`,
+      });
     } else if (EMBED_COMPONENTS.has(inst.component)) {
       const code = readStringProp(propsIdx.get(inst.id), "code");
       if (code && code.includes("<img")) {
@@ -204,7 +219,7 @@ function renderPage(p: PageAudit, heroDepth: number, verbose: boolean): string[]
     const t = trunc(belowFoldBad); if (t) out.push(t);
   }
   if (p.rawImgs.length > 0) {
-    out.push(`\n  🚫 Raw HTML <img> in Embed (${p.rawImgs.length}) — auto optimization bypassed, use the Image component:`);
+    out.push(`\n  🚫 Raw <img> (${p.rawImgs.length} — Embed HTML or legacy ws:element instances) — optimization bypassed, use the Image component:`);
     for (const r of p.rawImgs.slice(0, cap)) {
       out.push(`     - [${r.instanceId}] (${r.component})${r.label ? ` "${r.label}"` : ""}`);
       out.push(`         ${r.snippet}`);
@@ -277,7 +292,7 @@ verbose=true for the full list (otherwise top 10 per category). Read-only.`,
     lines.push(`🔍 audit_images — ${build.project?.title ?? input.projectSlug} (${pages.length} page${pages.length > 1 ? "s" : ""})`);
     lines.push(``);
     lines.push(`📊 Summary:`);
-    lines.push(`  - Image components: ${totalImages} | raw <img> in embeds: ${totalRaw}`);
+    lines.push(`  - Image components: ${totalImages} | raw <img> (embeds + ws:element instances): ${totalRaw}`);
     lines.push(`  - 📸 No loading attr: ${totalNoLoading}`);
     lines.push(`  - ⚡ Hero (depth<=${input.heroDepth}) not eager: ${totalHeroBad}`);
     lines.push(`  - 🐌 Below-fold not lazy: ${totalBelowFoldBad}`);

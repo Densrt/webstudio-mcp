@@ -140,8 +140,7 @@ On subsequent pastes with the same tokens (identical ID + name):
 
 ## Current limitations (v1)
 
-- No support for **breakpoints** in tokens (a token = "base" styles only). Responsive overrides must be local on the instances.
-- No support for **states** (`:hover`, etc.) in tokens.
+- ~~No support for breakpoints/states in tokens~~ **OUTDATED (corrected 2026-06-10)** — `tokens.update_token_styles` accepts `breakpoint` and `state` per update entry (see tokens-mega): a token CAN carry tablet/mobile overrides and `:hover` styles. Prefer tokenizing responsive overrides over duplicating them as locals.
 - No auto-extraction from Figma into tokens.json (manual pipeline via `define_token`).
 - No consistency validation (e.g. 2 tokens with the same name but different slugs → Webstudio will match by name on the next paste).
 

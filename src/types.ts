@@ -157,9 +157,11 @@ export const RADIX_COMPONENTS = new Set([
 // Maps our component aliases to ws:element + HTML tag.
 // Components left as-is are real Webstudio React components with their own
 // runtime: Image (srcset, lazy, asset-bound dims), HtmlEmbed, Form, Input,
-// Textarea, Select, Video, YouTube, Vimeo, etc. For a raw <img>, use
-// addInstance("ws:element", { tag: "img" }) explicitly. For HTML5 video,
-// always use the first-class "Video" component — NEVER ws:element tag="video".
+// Textarea, Select, Video, YouTube, Vimeo, etc. For images, ALWAYS use the
+// first-class "Image" component — src accepts asset | URL string | expression
+// (pattern image-component) — NEVER ws:element tag="img" (the push boundary
+// auto-converts those, coerce:image-component). For HTML5 video, always use
+// the first-class "Video" component — NEVER ws:element tag="video".
 export const COMPONENT_TO_TAG: Record<string, { component: string; defaultTag: string }> = {
   Box: { component: "ws:element", defaultTag: "div" },
   Heading: { component: "ws:element", defaultTag: "h1" },

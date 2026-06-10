@@ -44,12 +44,16 @@ pkg.version = next;
 await writeFile(PKG_PATH, JSON.stringify(pkg, null, 2) + "\n");
 
 // Patch the SERVER_VERSION literal in src/index.ts.
+// Detect the literal's PRESENCE with a regex test (not post-replace string equality):
+// when next === current the replacement is identical, so `patched === src` would
+// misfire as "literal not found" and abort a legitimate same-version (idempotent) run.
+const SERVER_VERSION_RE = /const SERVER_VERSION = "[^"]+";/;
 const src = await readFile(SRC_PATH, "utf-8");
-const patched = src.replace(/const SERVER_VERSION = "[^"]+";/, `const SERVER_VERSION = "${next}";`);
-if (patched === src) {
+if (!SERVER_VERSION_RE.test(src)) {
   console.error(`Could not find SERVER_VERSION literal in ${SRC_PATH}. Aborting.`);
   process.exit(1);
 }
+const patched = src.replace(SERVER_VERSION_RE, `const SERVER_VERSION = "${next}";`);
 await writeFile(SRC_PATH, patched);
 
 console.log(`Bumped ${current} → ${next}`);

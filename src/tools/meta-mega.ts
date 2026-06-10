@@ -74,7 +74,7 @@ const DESCRIPTIONS = {
   index: `Use when: discover the catalog of v1.0+ mega-tools (name + 1-line summary) at session start. Do NOT use when: looking for a specific pattern recipe (use action:"describe_pattern") or doing a free-text "how do I X" triage (use action:"guide"). Returns: list of {name, summary, actionCount} + a footer with the pattern catalog size and how to reach it. Side effects: none. Example: {action:"index",label:"discover"}`,
   list_patterns: `Use when: enumerate the available Webstudio pattern recipes — slug, human name, category — BEFORE deciding which to fetch with describe_pattern. Avoid guessing slugs (re-inventing wheels: bento, mega-menu, sheet-mobile, swiper…). Do NOT use when: you already know the slug (call describe_pattern directly) or doing a free-text "how do I X" triage (use action:"guide"). Returns: grouped list by category with {slug, name, description}. Optional \`filter\` does case-insensitive substring matching on slug/name/description/category. Side effects: none. Example: {action:"list_patterns",label:"discover-patterns"} or {action:"list_patterns",label:"find-bento",filter:"bento"}. Tip: patterns are also exposed as MCP Resources at webstudio://patterns/<slug> — clients with resources support can list them via the standard ListResources call without invoking this action.`,
   describe_pattern: `Use when: fetch a Webstudio pattern recipe (mega-menu, sheet mobile, swiper, sticky header, etc.) or a helper snippet — full doc from docs/patterns/<slug>.md. Do NOT use when: needing tool documentation (use action:"index"), browsing the catalog (use action:"list_patterns"), or you don't know the slug (use action:"guide" with a free-text brief). Returns: markdown recipe with pitfalls. Side effects: none. Example: {action:"describe_pattern",label:"sheet-doc",pattern:"sheet-mobile-radix"}`,
-  get_more_tools: `Use when: find action recommendations from a free-text intent — TOOL ACTIONS ONLY. Pass an optional category to filter by tool name (e.g. category:"tokens" only matches tools whose name contains "tokens"). Do NOT use when: you want patterns + tools combined (use action:"guide" — it covers both). Returns: top 1-5 (action, tool, BM25 score, description snippet) ranked by Okapi BM25 against the brief. Side effects: none (read-only — builds an in-memory index over registered mega-tool action descriptions). Example: {action:"get_more_tools",label:"find-tools",category:"tokens",brief:"remove orphan style overrides"}`,
+  get_more_tools: `Use when: fetch the FULL doc of one action (pass brief:"<tool>.<action>", e.g. brief:"instances.append" — wire schemas only carry one-line summaries) or find action recommendations from a free-text intent — TOOL ACTIONS ONLY. Pass an optional category to filter by tool name (e.g. category:"tokens" only matches tools whose name contains "tokens"). Do NOT use when: you want patterns + tools combined (use action:"guide" — it covers both). Returns: exact "<tool>.<action>" brief → the full action doc (params, redirections, example); free text → top 1-5 (action, tool, BM25 score, description snippet) ranked by Okapi BM25. Side effects: none (read-only — builds an in-memory index over registered mega-tool action descriptions). Example: {action:"get_more_tools",label:"doc-append",brief:"instances.append"} or {action:"get_more_tools",label:"find-tools",category:"tokens",brief:"remove orphan style overrides"}`,
   guide: `Use when: SINGLE-SHOT triage for "how do I do X in Webstudio" — searches BOTH pattern recipes (with full body) AND tool xActions in one BM25 ranking, returns the top matches with a "next action" hint mapping each pattern to its recommended high-level tool (e.g. navigation-menu-radix → build.create_navigation_menu). Use this BEFORE improvising a build.push_fragment or instances.append on any non-trivial section. Do NOT use when: you already know the slug (call describe_pattern directly) or you only want tools without patterns (use get_more_tools). Returns: top N results with [PATTERN]/[TOOL] markers + a recommended next call. Side effects: none. Example: {action:"guide",label:"how-mega-menu",brief:"desktop mega menu with mobile burger drawer"}`,
 };
 
@@ -85,6 +85,30 @@ const strip = (input: Record<string, unknown>): Record<string, unknown> => {
 };
 
 export function makeMetaTool(getToolsList: () => ToolModule[]): ToolModule {
+  // Corpus/index cache (v2.13.0). `guide` re-read all 40 pattern bodies from
+  // disk and rebuilt the BM25 index on EVERY call; `get_more_tools` rebuilt its
+  // index too. Tools never change post-boot and patterns only change on disk
+  // edits (dev), so a short TTL is safe. Scoped to the factory instance —
+  // tests building meta tools over stub tool lists stay isolated.
+  const INDEX_CACHE_TTL_MS = 30_000;
+  type CachedCorpus = {
+    docs: Array<{ payload: unknown; text: string }>;
+    index: ReturnType<typeof buildIndex<unknown>>;
+    builtAt: number;
+  };
+  const indexCache = new Map<string, CachedCorpus>();
+  const cachedIndex = (
+    key: string,
+    build: () => Array<{ payload: unknown; text: string }>,
+  ): CachedCorpus => {
+    const hit = indexCache.get(key);
+    if (hit && Date.now() - hit.builtAt < INDEX_CACHE_TTL_MS) return hit;
+    const docs = build();
+    const entry = { docs, index: buildIndex(docs), builtAt: Date.now() };
+    indexCache.set(key, entry);
+    return entry;
+  };
+
   const HANDLERS = {
     index: async (_input: Record<string, unknown>) => {
       const tools = getToolsList();
@@ -167,58 +191,60 @@ export function makeMetaTool(getToolsList: () => ToolModule[]): ToolModule {
         | { kind: "pattern"; slug: string; name: string; description: string; category?: string; recommendedTool?: string; recommendedToolNote?: string }
         | { kind: "tool"; tool: string; action: string; description: string };
 
-      const docs: Array<{ payload: GuideDoc; text: string }> = [];
+      // Corpus is cached (30s TTL) — building it reads every pattern body from disk.
+      const corpus = cachedIndex(`guide:tools=${includeTools}`, () => {
+        const docs: Array<{ payload: GuideDoc; text: string }> = [];
 
-      // Patterns: index slug + name + description + category + FULL body (markdown).
-      // BM25's IDF naturally penalises common terms, so indexing the body is safe and
-      // boosts recall on intent phrases like "burger menu" that only appear in the
-      // recipe text, not in the short frontmatter description.
-      // `recommendedTool` / `recommendedToolNote` come straight from the pattern's
-      // frontmatter (see resources.ts) — no static mapping to maintain.
-      const patterns = listPatternResources();
-      for (const p of patterns) {
-        let body = "";
-        const res = readPatternResource(p.uri);
-        if (res && res.contents.length > 0) {
-          body = res.contents[0].text;
+        // Patterns: index slug + name + description + category + FULL body (markdown).
+        // BM25's IDF naturally penalises common terms, so indexing the body is safe and
+        // boosts recall on intent phrases like "burger menu" that only appear in the
+        // recipe text, not in the short frontmatter description.
+        // `recommendedTool` / `recommendedToolNote` come straight from the pattern's
+        // frontmatter (see resources.ts) — no static mapping to maintain.
+        for (const p of listPatternResources()) {
+          let body = "";
+          const res = readPatternResource(p.uri);
+          if (res && res.contents.length > 0) {
+            body = res.contents[0].text;
+          }
+          docs.push({
+            payload: {
+              kind: "pattern",
+              slug: p.slug,
+              name: p.name,
+              description: p.description,
+              category: p.category,
+              recommendedTool: p.recommendedTool,
+              recommendedToolNote: p.recommendedToolNote,
+            },
+            text: `${p.slug} ${p.name} ${p.description} ${p.category ?? ""} ${body}`,
+          });
         }
-        docs.push({
-          payload: {
-            kind: "pattern",
-            slug: p.slug,
-            name: p.name,
-            description: p.description,
-            category: p.category,
-            recommendedTool: p.recommendedTool,
-            recommendedToolNote: p.recommendedToolNote,
-          },
-          text: `${p.slug} ${p.name} ${p.description} ${p.category ?? ""} ${body}`,
-        });
-      }
 
-      // Tool actions: same indexing strategy as get_more_tools, mixed into the same ranking.
-      if (includeTools) {
-        const tools = getToolsList();
-        for (const t of tools) {
-          const toolName = t.definition.name;
-          const schema = t.definition.inputSchema as { xActions?: Array<{ action: string; description: string }> } | undefined;
-          const actionsMeta = schema?.xActions;
-          if (!actionsMeta || actionsMeta.length === 0) continue;
-          for (const meta of actionsMeta) {
-            docs.push({
-              payload: { kind: "tool", tool: toolName, action: meta.action, description: meta.description },
-              text: `${toolName} ${meta.action} ${meta.description}`,
-            });
+        // Tool actions: same indexing strategy as get_more_tools, mixed into the same ranking.
+        if (includeTools) {
+          for (const t of getToolsList()) {
+            const toolName = t.definition.name;
+            const schema = t.definition.inputSchema as { xActions?: Array<{ action: string; description: string }> } | undefined;
+            const actionsMeta = schema?.xActions;
+            if (!actionsMeta || actionsMeta.length === 0) continue;
+            for (const meta of actionsMeta) {
+              docs.push({
+                payload: { kind: "tool", tool: toolName, action: meta.action, description: meta.description },
+                text: `${toolName} ${meta.action} ${meta.description}`,
+              });
+            }
           }
         }
-      }
+        return docs;
+      });
 
-      if (docs.length === 0) {
+      const patterns = listPatternResources();
+      if (corpus.docs.length === 0) {
         return textResult(`No corpus to search (no patterns + no tools registered).`);
       }
 
-      const index = buildIndex(docs);
-      const results = search(index, brief, topN);
+      const results = search(corpus.index, brief, topN) as Array<{ payload: GuideDoc; score: number }>;
       if (results.length === 0) {
         return textResult(
           `# Guide — "${brief}"\n\n` +
@@ -267,31 +293,52 @@ export function makeMetaTool(getToolsList: () => ToolModule[]): ToolModule {
       if (!brief) return errorResult("VALIDATION_FAILED", "brief is required");
 
       type Doc = { tool: string; action: string; description: string };
-      const docs: Array<{ payload: Doc; text: string }> = [];
-      const tools = getToolsList();
-      for (const t of tools) {
-        const toolName = t.definition.name;
-        if (category && !toolName.toLowerCase().includes(category)) continue;
-        const schema = t.definition.inputSchema as { xActions?: Array<{ action: string; description: string }> } | undefined;
-        const actionsMeta = schema?.xActions;
-        if (!actionsMeta || actionsMeta.length === 0) {
-          const description = t.definition.description ?? "";
-          docs.push({
-            payload: { tool: toolName, action: "(tool itself)", description },
-            text: `${toolName} ${toolName} ${description}`,
-          });
-          continue;
+      // Corpus is cached per category filter (30s TTL).
+      const corpus = cachedIndex(`more:cat=${category}`, () => {
+        const docs: Array<{ payload: Doc; text: string }> = [];
+        for (const t of getToolsList()) {
+          const toolName = t.definition.name;
+          if (category && !toolName.toLowerCase().includes(category)) continue;
+          const schema = t.definition.inputSchema as { xActions?: Array<{ action: string; description: string }> } | undefined;
+          const actionsMeta = schema?.xActions;
+          if (!actionsMeta || actionsMeta.length === 0) {
+            const description = t.definition.description ?? "";
+            docs.push({
+              payload: { tool: toolName, action: "(tool itself)", description },
+              text: `${toolName} ${toolName} ${description}`,
+            });
+            continue;
+          }
+          for (const meta of actionsMeta) {
+            docs.push({
+              payload: { tool: toolName, action: meta.action, description: meta.description },
+              text: `${toolName} ${meta.action} ${meta.description}`,
+            });
+          }
         }
-        for (const meta of actionsMeta) {
-          docs.push({
-            payload: { tool: toolName, action: meta.action, description: meta.description },
-            text: `${toolName} ${meta.action} ${meta.description}`,
-          });
+        return docs;
+      });
+      const docs = corpus.docs as Array<{ payload: Doc; text: string }>;
+
+      // Exact "<tool>.<action>" (or bare action name) lookup → full doc, no BM25.
+      // This is the progressive-disclosure path of the wire-schema economy
+      // (v2.12.0): wire schemas carry one-line summaries, the full description
+      // (params, redirections, example) is fetched here on demand.
+      const wanted = brief.toLowerCase();
+      const exact = docs.filter(
+        (d) =>
+          `${d.payload.tool}.${d.payload.action}`.toLowerCase() === wanted ||
+          d.payload.action.toLowerCase() === wanted,
+      );
+      if (exact.length > 0) {
+        const lines = [`Full doc — ${exact.length} exact match(es) for "${brief}":\n`];
+        for (const d of exact) {
+          lines.push(`## ${d.payload.tool}.${d.payload.action}\n${d.payload.description}\n`);
         }
+        return textResult(lines.join("\n"));
       }
 
-      const index = buildIndex(docs);
-      const results = search(index, brief, topN);
+      const results = search(corpus.index, brief, topN) as Array<{ payload: Doc; score: number }>;
       if (results.length === 0) {
         return textResult(`No actions matched "${brief}"${category ? ` in category "${category}"` : ""}. Try broader terms or use meta.index to see all tools.`);
       }

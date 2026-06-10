@@ -42,6 +42,54 @@ export function collectDescendantIds(
  */
 export const SHARED_CHILDREN_COMPONENTS: ReadonlySet<string> = new Set(["Slot"]);
 
+export type SharedRemovalConflict = {
+  id: string;
+  label?: string;
+  /** True when the id was explicitly requested for removal (vs swept as a descendant). */
+  isRoot: boolean;
+  /** Instances OUTSIDE the removal set that still reference this id as a child. */
+  referrers: Array<{ id: string; component: string; label?: string }>;
+};
+
+/**
+ * Shared-subtree guard (v2.19.0): ids whose removal would break content still
+ * referenced OUTSIDE the removal set — the shared-Slot DAG case. A Slot's
+ * child Fragment is referenced by every page using that Slot; removing a
+ * subtree that contains it (or targeting it directly) destroys the other
+ * pages' content. Cas réel: orphan-cleanup cascade killed shared header
+ * children on a live multi-page project, 2026-06-10.
+ *
+ * Rules: a requested ROOT legitimately has ONE outside referrer (its parent,
+ * detached via buildParentChildrenPatch) — it conflicts only with >1.
+ * A swept DESCENDANT's only legitimate parent is inside the set — ANY
+ * outside referrer is a conflict.
+ */
+export function findSharedRemovalConflicts(
+  build: WebstudioBuild,
+  rootIdsToRemove: string[],
+): SharedRemovalConflict[] {
+  const roots = new Set(rootIdsToRemove);
+  const removalSet = new Set<string>();
+  for (const id of rootIdsToRemove) {
+    for (const desc of collectDescendantIds(id, build.instances, SHARED_CHILDREN_COMPONENTS)) {
+      removalSet.add(desc);
+    }
+  }
+  const conflicts: SharedRemovalConflict[] = [];
+  for (const id of removalSet) {
+    const referrers = build.instances
+      .filter((i) => !removalSet.has(i.id) && i.children.some((c) => c.type === "id" && c.value === id))
+      .map((i) => ({ id: i.id, component: i.component, label: i.label }));
+    const isRoot = roots.has(id);
+    const threshold = isRoot ? 1 : 0;
+    if (referrers.length > threshold) {
+      const inst = build.instances.find((i) => i.id === id);
+      conflicts.push({ id, label: inst?.label, isRoot, referrers });
+    }
+  }
+  return conflicts;
+}
+
 /**
  * Build patches that remove a set of instances plus all their orphans.
  * Returns changes per namespace (instances, props, styleSourceSelections).

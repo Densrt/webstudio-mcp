@@ -125,4 +125,13 @@ To "undo" a binding, use `webstudio_update_page` with the field as a normal stri
 - **System params** not yet exposed: to use `system.params.slug` etc., go through `kind: "raw"` (advanced).
 - **Resources (CMS/API fetched data)**: not covered — these are dataSources of type `parameter` + a separate `resources` object. More complex workflow (will be MVP-6 if we touch dynamic pages such as product detail pages).
 - **No delete_variable** or `update_variable_value`: the user can do it in the builder.
-- **No binding on instance props**: binding currently only applies to page fields. To bind an instance text/href to a variable, this would need to be extended.
+- ~~No binding on instance props~~ **OUTDATED (corrected 2026-06-10)** — `instances.prop_bind` binds any instance prop to a variable / resource expression / page field (see `src/tools/bind-instance-prop.ts`). This limit no longer exists.
+
+## data-ws-show: the binding MUST be boolean (v2.19.0)
+
+A `data-ws-show` expression that resolves to a NUMBER leaks a literal "0" as text on the
+live page instead of hiding the element (cas réel: template multi-concess, 2026-06-10).
+Push paths lint these bindings: a `….length` tail is auto-fixed to `….length > 0`
+(`coerce:show-binding-length`); any other non-boolean-shaped expression gets a warning
+(`detect:show-binding-not-boolean`). Always write an explicit boolean: `expr != null`,
+`expr !== ""`, `expr.length > 0`.

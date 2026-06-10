@@ -7,8 +7,9 @@ import { textResult, errorResult, authErrorResult, runtimeErrorResult } from "./
 import { requireAuth, requirePushAuth } from "../auth.js";
 import { fetchBuild, pushWithRetry } from "../webstudio-client.js";
 import type { WebstudioBuild, BuildPatchTransaction } from "../webstudio-client.js";
-import { buildInstanceRemovalChanges, buildParentChildrenPatch, collectDescendantIds } from "../cleanup-helpers.js";
+import { buildInstanceRemovalChanges, buildParentChildrenPatch, collectDescendantIds, findSharedRemovalConflicts } from "../cleanup-helpers.js";
 import { customAlphabet } from "nanoid";
+import { logCoerce } from "../lib/telemetry.js";
 
 const txId = customAlphabet("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_", 21);
 
@@ -134,6 +135,22 @@ Example: { projectSlug: "my-site", instanceIds: ["abc123", "xyz789"], dryRun: fa
     ];
     if (ids.length === 0) {
       return textResult(`No instance matches these criteria (labels=${JSON.stringify(labels)}, componentMatch=${componentMatch}).`);
+    }
+
+    // Shared-subtree guard (v2.19.0): refuse when the removal would destroy
+    // instances still referenced OUTSIDE the deleted set (shared-Slot DAG).
+    const conflicts = findSharedRemovalConflicts(build, ids);
+    if (conflicts.length > 0) {
+      void logCoerce("detect:delete-shared-subtree-blocked", {
+        source: "instances.delete", projectSlug, count: conflicts.length,
+      });
+      const detail = conflicts.slice(0, 5).map((c) =>
+        `  - ${c.id}${c.label ? ` "${c.label}"` : ""}${c.isRoot ? " (requested)" : " (descendant)"} still referenced by: ${c.referrers.map((r) => `${r.component}${r.label ? ` "${r.label}"` : ""} (${r.id})`).join(", ")}`,
+      ).join("\n");
+      return errorResult(
+        "VALIDATION_FAILED",
+        `REFUSED — ${conflicts.length} instance(s) in the deletion set are still referenced by live instances OUTSIDE it (shared Slot content):\n${detail}\n\nDeleting them would break every page sharing that content. Narrow the instanceIds, or detach the shared Slot references first.`,
+      );
     }
 
     let tx;

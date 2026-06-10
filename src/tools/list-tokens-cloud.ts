@@ -22,6 +22,9 @@ export const listTokensCloudInputSchema = z.object({
   withUsage: z.boolean().default(true),
   /** Sort: "name" (default) | "usage" (desc). */
   sort: z.enum(["name", "usage"]).default("name"),
+  /** Max rows returned (v2.14.0 — responses were unbounded on token-heavy projects). */
+  limit: z.number().int().min(1).max(1000).default(200)
+    .describe("Max rows returned (default 200). A footer reports how many rows were cut."),
 }).strict();
 
 type Token = WebstudioBuild["styleSources"][number] & { type: "token"; name: string };
@@ -123,6 +126,7 @@ Example: { projectSlug: "acme", filter: "color", sort: "usage" }`,
         filter: { type: "string" },
         withUsage: { type: "boolean" },
         sort: { type: "string", enum: ["name", "usage"] },
+        limit: { type: "number", description: "Max rows returned (default 200)." },
       },
       required: ["projectSlug"],
       additionalProperties: false,
@@ -148,12 +152,17 @@ Example: { projectSlug: "acme", filter: "color", sort: "usage" }`,
     catch (err) { return runtimeErrorResult(err, "fetch build failed"); }
 
     const rows = buildRows(build, data);
+    const shown = rows.slice(0, data.limit);
 
     const lines: string[] = [];
     lines.push(`# Cloud tokens — ${data.projectSlug}`);
     lines.push(`Total: ${rows.length}${data.filter ? `  (filter: "${data.filter}")` : ""}  Sort: ${data.sort}`);
     lines.push("");
-    lines.push(renderTable(rows, data.withUsage));
+    lines.push(renderTable(shown, data.withUsage));
+    if (shown.length < rows.length) {
+      lines.push("");
+      lines.push(`[truncated: ${shown.length}/${rows.length} rows — raise \`limit\` or narrow with \`filter\`]`);
+    }
 
     return textResult(lines.join("\n"));
   },

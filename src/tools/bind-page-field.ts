@@ -2,13 +2,15 @@
 // Bind a page field (title, meta.*) to a JS expression that may reference variables.
 
 import { z } from "zod";
+import { BindingSchema } from "../lib/zod-binding.js";
 import { customAlphabet } from "nanoid";
 import type { ToolModule } from "./types.js";
 import { textResult, errorResult, authErrorResult, runtimeErrorResult } from "./types.js";
 import { requireAuth, requirePushAuth } from "../auth.js";
 import { fetchBuild, pushWithRetry } from "../webstudio-client.js";
 import type { WebstudioBuild, BuildPatchTransaction } from "../webstudio-client.js";
-import { bindingToExpression, type Binding } from "../expressions.js";
+import { bindingToExpression, lintBinding, type Binding } from "../expressions.js";
+import { logCoerce } from "../lib/telemetry.js";
 
 const txId = customAlphabet("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_", 21);
 
@@ -21,18 +23,6 @@ const BINDABLE_FIELDS = [
   "meta.excludePageFromSearch",
 ] as const;
 
-const PathSegmentSchema = z.union([z.string(), z.number()]);
-
-const TemplatePartSchema = z.discriminatedUnion("type", [
-  z.object({ type: z.literal("text"), value: z.string() }),
-  z.object({ type: z.literal("variable"), dataSourceId: z.string(), path: z.array(PathSegmentSchema).optional() }),
-]);
-
-const BindingSchema = z.discriminatedUnion("kind", [
-  z.object({ kind: z.literal("variable"), dataSourceId: z.string(), path: z.array(PathSegmentSchema).optional() }),
-  z.object({ kind: z.literal("template"), parts: z.array(TemplatePartSchema) }),
-  z.object({ kind: z.literal("raw"), expression: z.string() }),
-]);
 
 export const bindPageFieldInputSchema = z.object({
   projectSlug: z.string(),
@@ -116,6 +106,20 @@ Example: { projectSlug: "acme", pageId: "p1", field: "meta.description", binding
     if (!parsed.success) return errorResult("VALIDATION_FAILED", `Validation error: ${parsed.error.message}`);
     const { projectSlug, pageId, field, binding, dryRun } = parsed.data;
 
+    // Lint a hand-written `raw` expression against Webstudio's allowlist (see lib/lint-expression).
+    const lint = lintBinding(binding);
+    if (lint?.severity === "error") return errorResult("EXPRESSION_INVALID", lint.message, lint.hint);
+    if (lint?.severity === "warning") {
+      void logCoerce(lint.telemetryKey, {
+        source: "pages.bind_field",
+        projectSlug,
+        pageId,
+        field,
+        violations: lint.violations.map((v) => `${v.type}:${v.detail}`),
+      });
+    }
+    const lintNote = lint?.severity === "warning" ? `\n\n⚠️  ${lint.hint}` : "";
+
     let auth;
     try {
       auth = dryRun ? requireAuth(projectSlug) : requirePushAuth(projectSlug);
@@ -142,7 +146,7 @@ Project: ${projectTitle}
 Page: ${pageId}
 Field: ${field}
 Resolved expression: ${expression}
-build version: ${build.version}`);
+build version: ${build.version}${lintNote}`);
     }
 
     try {
@@ -153,7 +157,7 @@ build version: ${build.version}`);
   build version → ${finalVersion}
   status: ${result.status}
 
-Reload the builder tab to see the binding appear in Page Settings.`);
+Reload the builder tab to see the binding appear in Page Settings.${lintNote}`);
     } catch (err) {
       return runtimeErrorResult(err, "Push failed");
     }

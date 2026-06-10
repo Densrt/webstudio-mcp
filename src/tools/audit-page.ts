@@ -33,7 +33,25 @@ export const auditPageInputSchema = z.object({
   pageId: z.string().optional(),
   allowedPrefix: z.string().optional(),
   flagDashes: z.boolean().default(false),
+  /** Response cap (v2.14.0 — reports were unbounded on instance-heavy pages). */
+  maxChars: z.number().int().min(2_000).max(200_000).default(40_000)
+    .describe("Max report size in chars (default 40 000). Truncated reports end with a note suggesting focused audits."),
 }).strict().refine((d) => !!d.pagePath || !!d.pageId, { message: "Provide pagePath or pageId" });
+
+/**
+ * Cap an audit report at `maxChars` (v2.14.0 — reports were unbounded on
+ * instance-heavy pages). Cuts at the last line boundary before the cap — a
+ * half-line confuses more than it informs — and appends a note pointing to
+ * the cheaper focused audits.
+ */
+export function truncateAuditReport(report: string, maxChars: number): string {
+  if (report.length <= maxChars) return report;
+  const cut = report.lastIndexOf("\n", maxChars);
+  return (
+    report.slice(0, cut > 0 ? cut : maxChars) +
+    `\n\n[truncated: ${report.length} chars > maxChars=${maxChars} — raise maxChars, or run the focused project-wide audits instead: audit.overflow / audit.local_styles / audit.token_usage / audit.images]`
+  );
+}
 
 export const auditPageTool: ToolModule = {
   definition: {
@@ -53,6 +71,7 @@ Example: { projectSlug: "acme", pageId: "p1", allowedPrefix: "acme-", flagDashes
         pageId: { type: "string" },
         allowedPrefix: { type: "string" },
         flagDashes: { type: "boolean" },
+        maxChars: { type: "number", description: "Max report size in chars (default 40 000)." },
       },
       required: ["projectSlug"],
       additionalProperties: false,
@@ -68,7 +87,7 @@ Example: { projectSlug: "acme", pageId: "p1", allowedPrefix: "acme-", flagDashes
   handler: async (args) => {
     const parsed = auditPageInputSchema.safeParse(args);
     if (!parsed.success) return errorResult("VALIDATION_FAILED", `Validation error: ${parsed.error.message}`);
-    const { projectSlug, pagePath, pageId, allowedPrefix, flagDashes } = parsed.data;
+    const { projectSlug, pagePath, pageId, allowedPrefix, flagDashes, maxChars } = parsed.data;
 
     let auth;
     try { auth = requireAuth(projectSlug); }
@@ -110,6 +129,6 @@ Example: { projectSlug: "acme", pageId: "p1", allowedPrefix: "acme-", flagDashes
     reportBindings(build, pageIds, page as { rootInstanceId: string; title?: unknown; meta?: unknown }, log);
     reportInconsistencies(build, pageIds, log);
 
-    return textResult(lines.join("\n"));
+    return textResult(truncateAuditReport(lines.join("\n"), maxChars));
   },
 };

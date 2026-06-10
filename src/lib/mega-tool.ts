@@ -7,6 +7,7 @@
 
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import { errorResult } from "../tools/types.js";
+import { dedupeSchemaDefs } from "./schema-dedupe.js";
 
 export type ActionHandler<T = unknown> = (input: T) => Promise<CallToolResult>;
 
@@ -73,15 +74,91 @@ export type MegaToolInputSchema = {
   xActions: ActionMeta[];
 };
 
+// Canonical section markers of the tool-description structure (see CLAUDE.md
+// "Tool description structure"). Everything from the first marker onward is
+// detail an agent can fetch on demand — only the "Use when:" lead travels on
+// the wire (v2.12.0 wire-schema economy; see pattern wire-schema-economy).
+const DESCRIPTION_DETAIL_MARKERS = [
+  " Do NOT use when:",
+  " Returns:",
+  " Side effects:",
+  " Example:",
+  " [PATTERN]",
+];
+
+const SUMMARY_HARD_CAP = 220;
+
+/**
+ * Compress a full action description to its one-line lead for the wire schema.
+ *
+ * - Cuts at the first canonical detail marker (Do NOT use when / Returns /
+ *   Side effects / Example) — the "Use when:" lead must be self-sufficient.
+ * - Short free-form descriptions (no markers) pass through unchanged.
+ * - Hard cap at 220 chars as a backstop for non-canonical descriptions.
+ * - The "CRITICAL — context required" safety marker is always preserved (the
+ *   agent must see it BEFORE calling, not after a CONTEXT_REQUIRED error).
+ *
+ * Full descriptions stay available in `xActions` (in-memory: meta.get_more_tools,
+ * meta.guide BM25) — they are no longer duplicated on the wire.
+ */
+export function summarizeActionDescription(description: string): string {
+  const oneLine = description.replace(/\s+/g, " ").trim();
+  let cut = oneLine.length;
+  for (const marker of DESCRIPTION_DETAIL_MARKERS) {
+    const idx = oneLine.indexOf(marker);
+    if (idx >= 0 && idx < cut) cut = idx;
+  }
+  let summary = oneLine.slice(0, cut).trim();
+  if (summary.length > SUMMARY_HARD_CAP) {
+    summary = summary.slice(0, SUMMARY_HARD_CAP - 1).trimEnd() + "…";
+  }
+  if (/CRITICAL/.test(oneLine) && !/CRITICAL/.test(summary)) {
+    summary += " [CRITICAL — context required]";
+  }
+  return summary;
+}
+
+// Wire definitions are immutable post-boot and the dedupe pass is pure —
+// compute once per definition, serve from cache on every ListTools.
+const wireDefCache = new WeakMap<object, unknown>();
+
+/**
+ * Wire-facing view of a tool definition:
+ *   1. minus the non-standard `xActions` metadata (server-side consumers
+ *      only — shipping it duplicated every action description, ~80k chars
+ *      across 15 tools measured v2.11.0);
+ *   2. repeated schema subtrees hoisted into `$defs`/`$ref` (v2.17.0 —
+ *      zod-to-json-schema inlines StyleValue & friends at every use site).
+ * In-memory definitions stay untouched (guard tests + meta BM25 read them).
+ */
+export function toWireToolDefinition<T extends { inputSchema: object }>(definition: T): T {
+  const cached = wireDefCache.get(definition);
+  if (cached) return cached as T;
+
+  const schema = definition.inputSchema as Partial<MegaToolInputSchema> & Record<string, unknown>;
+  let wireSchema: Record<string, unknown> = schema;
+  if ("xActions" in wireSchema) {
+    const { xActions: _x, ...rest } = wireSchema;
+    wireSchema = rest;
+  }
+  wireSchema = dedupeSchemaDefs(wireSchema);
+
+  const wire = wireSchema === schema ? definition : ({ ...definition, inputSchema: wireSchema } as T);
+  wireDefCache.set(definition, wire);
+  return wire;
+}
+
 /**
  * Build the JSON Schema for a mega-tool's `inputSchema`. Returns a **flat** schema:
- *   - `action`: enum of all branch discriminator values, description concatenates each variant's docs
+ *   - `action`: enum of all branch discriminator values, description lists each
+ *     variant's one-line summary (full docs live in `xActions` / meta.get_more_tools)
  *   - `label`: 3-30 chars action label
  *   - all branch properties merged by name (first-wins on conflicts)
  *   - `required: ["action", "label"]` — per-action required fields are enforced at
  *     runtime by the Zod discriminated union, not by JSON Schema (the API rejects
  *     `oneOf` at the top level so we can't express per-branch required[] there).
- *   - `xActions`: metadata for the `meta` mega-tool (index + BM25 ranking).
+ *   - `xActions`: full per-action metadata for the `meta` mega-tool (index + BM25
+ *     ranking). Stripped from the wire by `toWireToolDefinition` at ListTools time.
  */
 export function buildJsonSchemaForActions(actions: ActionDef[]): MegaToolInputSchema {
   if (actions.length === 0) {
@@ -89,8 +166,9 @@ export function buildJsonSchemaForActions(actions: ActionDef[]): MegaToolInputSc
   }
   const actionEnum = actions.map((a) => a.action);
   const actionDescription = actions
-    .map((a) => `action="${a.action}" — ${a.description}`)
-    .join("\n\n");
+    .map((a) => `action="${a.action}" — ${summarizeActionDescription(a.description)}`)
+    .join("\n")
+    + `\n\nFull docs for one action (params, redirections, example): meta.get_more_tools({brief:"<tool>.<action>"}).`;
   const properties: Record<string, object> = {
     action: { type: "string", enum: actionEnum, description: actionDescription },
     label: {

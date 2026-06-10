@@ -10,6 +10,13 @@ recommendedToolNote: use the native Video component — NEVER ws:element tag='vi
 
 # Video — native component pattern
 
+> **Server enforcement (v2.19.0)** — push paths auto-convert childless `ws:element`/`Box`
+> `tag:"video"` to the native `Video` component (`coerce:video-component`), renaming
+> lowercase HTML attrs (autoplay → autoPlay, playsinline → playsInline) and coercing their
+> string values to booleans. Raw videos WITH `<source>` children are detected + hinted,
+> never silently rewritten (`detect:raw-video-with-children`). iframe YouTube/Vimeo embeds
+> are detected with a nudge toward the native components (`detect:iframe-video-embed`).
+
 ## Rule
 
 **Always use the Webstudio `Video` component**, never `ws:element tag="video"`.

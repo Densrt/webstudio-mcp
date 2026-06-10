@@ -1,4 +1,7 @@
 import { encodeExpressionRefs } from "./utils/expression-encoding.js";
+import { lintExpression, type LintResult } from "./lib/lint-expression.js";
+
+export type { LintResult } from "./lib/lint-expression.js";
 
 // Helpers for building Webstudio JS expressions bound to dataSources.
 //
@@ -64,4 +67,16 @@ export function bindingToExpression(binding: Binding): string {
   // refs (`-` → `__DASH__`) so a raw id with a dash doesn't silently render empty.
   // Idempotent: re-encoding an already-encoded ref is a no-op.
   return encodeExpressionRefs(binding.expression);
+}
+
+/**
+ * Lint a binding's hand-written expression against Webstudio's allowlist.
+ * Only `raw` bindings carry author-written JS — `variable` / `template` produce safe
+ * auto-generated expressions, so they return `null` (nothing to lint).
+ * Lints the ENCODED form so `$ws$dataSource$a-b` parses as one identifier.
+ * See src/lib/lint-expression.ts for the warn-vs-error rationale.
+ */
+export function lintBinding(binding: Binding): LintResult | null {
+  if (binding.kind !== "raw") return null;
+  return lintExpression(encodeExpressionRefs(binding.expression));
 }

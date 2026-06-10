@@ -29,7 +29,12 @@ function walkHtml(
   classToInstances: Map<string, string[]>,
 ): string {
   const tag = node.tagName?.toLowerCase() ?? "div";
-  const instanceId = builder.addInstance("Box", { tag, label: tag, parentId });
+  // <img> maps to the native Image component (v2.18.0 — src accepts URL
+  // strings, see pattern image-component), everything else to Box + tag.
+  const isImg = tag === "img";
+  const instanceId = isImg
+    ? builder.addInstance("Image", { label: "img", parentId })
+    : builder.addInstance("Box", { tag, label: tag, parentId });
 
   // Register classes
   const classAttr = node.getAttribute("class") ?? "";
@@ -43,6 +48,11 @@ function walkHtml(
   for (const [name, value] of Object.entries(node.attributes)) {
     if (SKIP_ATTRS.has(name)) continue;
     if (value === undefined || value === null) continue;
+    // Image's width/height are numeric props (CLS hints).
+    if (isImg && (name === "width" || name === "height") && /^\d+$/.test(String(value))) {
+      builder.addProp(instanceId, name, "number", Number(value));
+      continue;
+    }
     builder.addProp(instanceId, name, "string", String(value));
   }
 

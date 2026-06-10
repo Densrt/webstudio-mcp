@@ -53,11 +53,10 @@ export function addCard(b: FragmentBuilder, options: CardOptions): CardResult {
   let imageId: InstanceId | undefined;
   if (options.imageSrc) {
     const isAsset = !options.imageSrc.startsWith("http");
-    // Native Image component (srcset, lazy, asset-bound dims) requires an asset id;
-    // string URLs fall back to ws:element + <img>.
-    imageId = isAsset
-      ? b.addInstance("Image", { id: `${p}-img`, parentId: cardId })
-      : b.addInstance("ws:element", { id: `${p}-img`, parentId: cardId, tag: "img" });
+    // Native Image component always — src accepts asset | URL string |
+    // expression (pattern image-component; the "asset-only" myth is debunked).
+    // Asset ids get the full optimization pipeline (srcset, lazy, dims).
+    imageId = b.addInstance("Image", { id: `${p}-img`, parentId: cardId });
     b.addProp(imageId, "src", isAsset ? "asset" : "string", options.imageSrc);
     if (options.imageAlt) b.addProp(imageId, "alt", "string", options.imageAlt);
     b.addStyles(imageId, {

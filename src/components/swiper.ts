@@ -199,12 +199,12 @@ export function addSwiper(b: FragmentBuilder, options: SwiperOptions): SwiperRes
       slideIds.push(slideId);
       b.addProp(slideId, "class", "string", "swiper-slide");
 
-      // Slides accept URL strings; use ws:element + <img> rather than the native
-      // Image component (which requires asset ids).
-      const imgId = b.addInstance("ws:element", {
-        id: `${p}-img-${i}`, parentId: slideId, tag: "img",
+      // Native Image component — src accepts URL strings as well as asset ids
+      // (pattern image-component; the "asset-only" myth is debunked).
+      const imgId = b.addInstance("Image", {
+        id: `${p}-img-${i}`, parentId: slideId,
       });
-      b.addProp(imgId, "src", "string", s.imgSrc);
+      b.addProp(imgId, "src", s.imgSrc.startsWith("http") ? "string" : "asset", s.imgSrc);
       b.addProp(imgId, "alt", "string", s.alt ?? "");
       b.addProp(imgId, "loading", "string", "lazy");
 

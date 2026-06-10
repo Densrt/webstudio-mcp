@@ -3,12 +3,18 @@ name: Image — native component, src accepts asset | URL string | expression
 description: How to insert an image (photo, visuel, vignette) with the native Webstudio Image component. Corrects the myth that src must be an asset — a plain URL string and a collection expression both render. Cas réel — migration <img> → Image sur un build single-brand, 2026-06.
 category: component
 complexity: simple
-lastUpdated: 2026-06-03
+lastUpdated: 2026-06-10
 recommendedTool: build.push_fragment
 recommendedToolNote: native Image component, short id "Image" — src accepts asset | URL string | expression (NOT asset-only)
 ---
 
 # Image — native component pattern
+
+> **Server enforcement (v2.18.0)** — push paths (`build.push_fragment`, `build.push_complete`,
+> `instances.append`) auto-convert `ws:element`/`Box` + `tag:"img"` instances to the native
+> `Image` component (`coerce:image-component`, props pass through unchanged). `build.push_html`
+> maps `<img>` to `Image` directly. `audit.images` flags legacy raw-img instances left in
+> existing projects. Cas réel: raw imgs pushed systematically across client builds, 2026-06-10.
 
 ## Rule
 

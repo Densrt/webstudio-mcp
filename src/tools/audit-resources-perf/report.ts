@@ -68,14 +68,33 @@ export function renderReport(
   const pageRows = [...byPage.values()].sort((a, b) => b.resources.length - a.resources.length);
   const heavyPages = pageRows.filter((p) => p.resources.length > maxPerPageThreshold);
 
+  // ── Render-time mutations (v2.20.0) ────────────────────────────────────────
+  // A dataSource of type "resource" is fetched on EVERY render of its scope.
+  // A non-GET resource exposed that way fires a MUTATION on page load (cas
+  // réel: empty webhook POSTs from a form action registered as a :root
+  // dataSource, 2026-06-10). A standalone non-GET resource (no dataSource)
+  // is the HEALTHY form-action shape — never flagged.
+  const renderTimeMutations = resources.filter((r) => !r.isGet && r.linkedDataSourceId !== undefined);
+
   // ── Summary ─────────────────────────────────────────────────────────────────
   lines.push(`\n## 📊 Summary`);
+  lines.push(`  - 🔥 Render-time mutations (non-GET exposed as dataSource): ${renderTimeMutations.length}`);
   lines.push(`  - Resources orphan (no bound dataSource scope): ${orphans.length}`);
   lines.push(`  - Pages with > ${maxPerPageThreshold} resources: ${heavyPages.length}`);
   lines.push(`  - Duplicated URLs (exact): ${dupes.length} groups`);
   lines.push(`  - Similar URLs (factorisation candidates): ${similar.length} groups`);
   lines.push(`  - Sync dependency chains: ${syncChains.length}`);
   lines.push(`  - GET without cache: ${cacheDisabled.length}`);
+
+  // ── Render-time mutations section ───────────────────────────────────────────
+  lines.push(`\n## 🔥 Render-time mutations (ERROR — fires on every page render)`);
+  if (renderTimeMutations.length === 0) lines.push(`  ✅ none`);
+  else {
+    for (const r of renderTimeMutations) {
+      lines.push(`  - [ERROR] "${r.name}" [${r.id}] ${r.method.toUpperCase()} exposed as dataSource ${r.linkedDataSourceId} @ ${r.linkedScopeInstanceId ?? "?"}`);
+    }
+    lines.push(`  Fix: delete the dataSource (keep the resource), then bind the Form's action prop to the resource (pattern form-action-resource). Empty-body calls hit the endpoint on every render until fixed.`);
+  }
 
   // ── Duplicates ──────────────────────────────────────────────────────────────
   lines.push(`\n## 🔁 Duplicated URLs (ERROR — pure waste)`);

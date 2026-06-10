@@ -5,30 +5,21 @@
 // Forces type=expression. Handles dataSource ID encoding (`-` → `__DASH__`) automatically.
 
 import { z } from "zod";
+import { BindingSchema } from "../lib/zod-binding.js";
 import { customAlphabet } from "nanoid";
 import type { ToolModule } from "./types.js";
 import { textResult, errorResult, authErrorResult, runtimeErrorResult } from "./types.js";
 import { requireAuth, requirePushAuth } from "../auth.js";
 import { fetchBuild, pushWithRetry } from "../webstudio-client.js";
 import type { WebstudioBuild, BuildPatchTransaction, BuildPatchOperation } from "../webstudio-client.js";
-import { bindingToExpression, type Binding } from "../expressions.js";
+import { bindingToExpression, lintBinding, type Binding } from "../expressions.js";
+import { lintShowBinding } from "../lib/lint-show-binding.js";
 import { assertSafeRadixProp } from "../lib/radix-wrappers.js";
+import { logCoerce } from "../lib/telemetry.js";
 
 const txId = customAlphabet("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_", 21);
 const newPropId = customAlphabet("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_", 21);
 
-const PathSegmentSchema = z.union([z.string(), z.number()]);
-
-const TemplatePartSchema = z.discriminatedUnion("type", [
-  z.object({ type: z.literal("text"), value: z.string() }),
-  z.object({ type: z.literal("variable"), dataSourceId: z.string(), path: z.array(PathSegmentSchema).optional() }),
-]);
-
-const BindingSchema = z.discriminatedUnion("kind", [
-  z.object({ kind: z.literal("variable"), dataSourceId: z.string(), path: z.array(PathSegmentSchema).optional() }),
-  z.object({ kind: z.literal("template"), parts: z.array(TemplatePartSchema) }),
-  z.object({ kind: z.literal("raw"), expression: z.string() }),
-]);
 
 export const bindInstancePropInputSchema = z.object({
   projectSlug: z.string(),
@@ -59,8 +50,14 @@ function validateDataSourceRefs(build: WebstudioBuild, binding: Binding): string
 function buildPatches(
   build: WebstudioBuild,
   args: z.infer<typeof bindInstancePropInputSchema>,
-): { patch: BuildPatchOperation; expression: string; created: boolean } {
-  const expression = bindingToExpression(args.binding);
+): { patch: BuildPatchOperation; expression: string; created: boolean; showLint?: ReturnType<typeof lintShowBinding> } {
+  let expression = bindingToExpression(args.binding);
+  // data-ws-show MUST resolve to a boolean (v2.19.0 — see lib/lint-show-binding).
+  let showLint: ReturnType<typeof lintShowBinding> | undefined;
+  if (args.propName === "data-ws-show") {
+    showLint = lintShowBinding(expression);
+    if (showLint.kind === "fixed") expression = showLint.expression;
+  }
   const existing = build.props.find((p) => p.instanceId === args.instanceId && p.name === args.propName);
 
   if (!existing) {
@@ -78,12 +75,14 @@ function buildPatches(
       patch: { op: "add", path: [newProp.id], value: newProp },
       expression,
       created: true,
+      showLint,
     };
   }
   return {
     patch: { op: "replace", path: [existing.id], value: { ...existing, type: "expression", value: expression } },
     expression,
     created: false,
+    showLint,
   };
 }
 
@@ -140,6 +139,22 @@ Example: { projectSlug: "my-site", instanceId: "h1", propName: "ariaLabel", bind
     if (!parsed.success) return errorResult("VALIDATION_FAILED", `Validation error: ${parsed.error.message}`);
     const data = parsed.data;
 
+    // Lint a hand-written `raw` expression against Webstudio's allowlist (see lib/lint-expression).
+    // error = unparseable → refuse (would break the published build). warning = runs at runtime but
+    // the editor flags it → pass through + educate via response hint + telemetry.
+    const lint = lintBinding(data.binding);
+    if (lint?.severity === "error") return errorResult("EXPRESSION_INVALID", lint.message, lint.hint);
+    if (lint?.severity === "warning") {
+      void logCoerce(lint.telemetryKey, {
+        source: "instances.prop_bind",
+        projectSlug: data.projectSlug,
+        instanceId: data.instanceId,
+        propName: data.propName,
+        violations: lint.violations.map((v) => `${v.type}:${v.detail}`),
+      });
+    }
+    const lintNote = lint?.severity === "warning" ? `\n\n⚠️  ${lint.hint}` : "";
+
     let auth;
     try { auth = data.dryRun ? requireAuth(data.projectSlug) : requirePushAuth(data.projectSlug); }
     catch (err) { return authErrorResult(err); }
@@ -169,10 +184,20 @@ Example: { projectSlug: "my-site", instanceId: "h1", propName: "ariaLabel", bind
     try { r = buildPatches(build, data); }
     catch (err) { return errorResult("VALIDATION_FAILED", (err as Error).message); }
 
+    let showNote = "";
+    if (r.showLint && r.showLint.kind !== "clean") {
+      void logCoerce(r.showLint.telemetryKey, {
+        source: "instances.prop_bind",
+        projectSlug: data.projectSlug,
+        instanceId: data.instanceId,
+      });
+      showNote = `\n\n⚠️  ${r.showLint.hint}`;
+    }
+
     const summary = `${r.created ? "Created" : "Replaced"} prop "${data.propName}" on ${data.instanceId}
   expression: ${r.expression}`;
 
-    if (data.dryRun) return textResult(`DRY-RUN bind_instance_prop\n\n${summary}\n\nIf OK, re-run with dryRun=false.`);
+    if (data.dryRun) return textResult(`DRY-RUN bind_instance_prop\n\n${summary}\n\nIf OK, re-run with dryRun=false.${lintNote}${showNote}`);
 
     try {
       const { result, finalVersion } = await pushWithRetry(auth, (cur) => {
@@ -183,7 +208,7 @@ Example: { projectSlug: "my-site", instanceId: "h1", propName: "ariaLabel", bind
         };
         return tx;
       });
-      return textResult(`Prop bound — version → ${finalVersion}\nstatus: ${result.status}\n\n${summary}`);
+      return textResult(`Prop bound — version → ${finalVersion}\nstatus: ${result.status}\n\n${summary}${lintNote}${showNote}`);
     } catch (err) {
       return runtimeErrorResult(err, "Bind failed");
     }

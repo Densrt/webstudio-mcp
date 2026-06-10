@@ -18,9 +18,14 @@
 // caller still uses webstudio_apply_token afterward — keeps v1 narrow.
 
 import { z } from "zod";
+import { BindingSchema } from "../lib/zod-binding.js";
 import { readFileSync } from "node:fs";
 import type { ToolModule } from "./types.js";
 import { textResult, errorResult, authErrorResult, runtimeErrorResult } from "./types.js";
+import { findReplaceTargets } from "../lib/find-replace-targets.js";
+import { coerceRawImgInstances } from "../lib/coerce-image-component.js";
+import { coerceRawVideoInstances } from "../lib/coerce-video-component.js";
+import { lintShowBindingProps } from "../lib/lint-show-binding.js";
 import {
   BuildFragmentSchema,
   StyleValueSchema,
@@ -42,7 +47,7 @@ import {
   buildParentChildrenPatch,
 } from "../cleanup-helpers.js";
 import { assertSafeRadixProp } from "../lib/radix-wrappers.js";
-import { bindingToExpression, type Binding } from "../expressions.js";
+import { bindingToExpression, lintBinding, type Binding } from "../expressions.js";
 import { expandStylesMap } from "./create-token/shared.js";
 import {
   coerceStyleValueWithMeta,
@@ -70,26 +75,6 @@ const ANIMATION_LONGHANDS_SET = new Set<string>([
 
 // ── Schemas ─────────────────────────────────────────────────────────────────
 
-const PathSegmentSchema = z.union([z.string(), z.number()]);
-
-const TemplatePartSchema = z.discriminatedUnion("type", [
-  z.object({ type: z.literal("text"), value: z.string() }),
-  z.object({
-    type: z.literal("variable"),
-    dataSourceId: z.string(),
-    path: z.array(PathSegmentSchema).optional(),
-  }),
-]);
-
-const BindingSchema = z.discriminatedUnion("kind", [
-  z.object({
-    kind: z.literal("variable"),
-    dataSourceId: z.string(),
-    path: z.array(PathSegmentSchema).optional(),
-  }),
-  z.object({ kind: z.literal("template"), parts: z.array(TemplatePartSchema) }),
-  z.object({ kind: z.literal("raw"), expression: z.string() }),
-]);
 
 const BindingEntrySchema = z.object({
   instanceId: z.string(),
@@ -553,31 +538,6 @@ function preprocessTokens(
 
 // ── Main handler ────────────────────────────────────────────────────────────
 
-function findReplaceTargets(
-  build: WebstudioBuild,
-  parentId: string,
-  labels: string[],
-  componentMatch?: string,
-): string[] {
-  const parent = build.instances.find((i) => i.id === parentId);
-  if (!parent) return [];
-  const labelSet = new Set(labels);
-  const found: string[] = [];
-  for (const c of parent.children) {
-    if (c.type !== "id") continue;
-    const inst = build.instances.find((i) => i.id === c.value);
-    if (!inst || !inst.label || !labelSet.has(inst.label)) continue;
-    if (componentMatch) {
-      const ok = inst.component === componentMatch ||
-        inst.component.endsWith(`:${componentMatch}`) ||
-        inst.component.split(":").pop() === componentMatch;
-      if (!ok) continue;
-    }
-    found.push(inst.id);
-  }
-  return found;
-}
-
 export const pushCompleteTool: ToolModule = {
   definition: {
     name: "webstudio_push_complete",
@@ -699,9 +659,27 @@ Example (footer column with 3 links, 1 token attached): { projectSlug:"my-site",
     }
 
     // Apply bindings as fragment-payload mutations (no separate post-push patches).
+    // Each `raw` binding is linted against Webstudio's allowlist first (see lib/lint-expression):
+    // error = unparseable → refuse; warning = runs at runtime but the editor flags it → educate.
     const bindingDetails: string[] = [];
+    const bindingLintHints: string[] = [];
     try {
       for (const b of workingBindings) {
+        const where = `${b.instanceId}${b.propName ? "." + b.propName : ""}`;
+        const lint = lintBinding(b.binding as Binding);
+        if (lint?.severity === "error") {
+          return errorResult("EXPRESSION_INVALID", `binding ${where}: ${lint.message}`, lint.hint);
+        }
+        if (lint?.severity === "warning") {
+          void logCoerce(lint.telemetryKey, {
+            source: "build.push_complete",
+            projectSlug: pushTo.projectSlug,
+            instanceId: b.instanceId,
+            propName: b.propName,
+            violations: lint.violations.map((v) => `${v.type}:${v.detail}`),
+          });
+          bindingLintHints.push(`binding ${where} → ${lint.hint}`);
+        }
         bindingDetails.push(applyBindingToFragment(workingInstances, workingProps, b));
       }
     } catch (err) {
@@ -745,6 +723,9 @@ Example (footer column with 3 links, 1 token attached): { projectSlug:"my-site",
     const tokenCoerceHints = [...new Set(tokensRes.coerceHints)];
     const tokenHintBlock = tokenCoerceHints.length > 0
       ? `\n\n[hints]\n${tokenCoerceHints.map((h) => `- ${h}`).join("\n")}`
+      : "";
+    const bindingHintBlock = bindingLintHints.length > 0
+      ? `\n\n[expression warnings]\n${bindingLintHints.map((h) => `- ${h}`).join("\n")}`
       : "";
 
     // Pre-flight (v2.7.6): refuse `useTokens` whose tokenSlug matches an existing
@@ -827,6 +808,29 @@ Example (footer column with 3 links, 1 token attached): { projectSlug:"my-site",
     }
 
     const fragment = builder.build();
+
+    // Coerce raw <img> instances to the native Image component (v2.18.0 —
+    // covers the assembled fragment incl. expanded pattern.repeat subtrees).
+    const imgCoerce = coerceRawImgInstances(fragment["@webstudio/instance/v0.1"].instances);
+    if (imgCoerce.count > 0) {
+      void logCoerce(imgCoerce.telemetryKey!, {
+        source: "build.push_complete",
+        projectSlug: input.projectSlug,
+        count: imgCoerce.count,
+      });
+    }
+    const payload0 = fragment["@webstudio/instance/v0.1"];
+    const videoCoerce = coerceRawVideoInstances(payload0.instances, payload0.props);
+    const showLint = lintShowBindingProps(payload0.props);
+    for (const t of [...videoCoerce.telemetry, ...showLint.telemetry]) {
+      void logCoerce(t.key, { source: "build.push_complete", projectSlug: input.projectSlug, count: t.count });
+    }
+    const allHints = [
+      ...(imgCoerce.hint ? [imgCoerce.hint] : []),
+      ...videoCoerce.hints,
+      ...showLint.hints,
+    ];
+    const imgHint = allHints.length > 0 ? `\n\n⚠ ${allHints.join("\n⚠ ")}` : "";
 
     // Pre-flight: refuse class/style/id props on Radix non-rendering wrappers.
     if (!pushTo.ignoreWrapperWarning) {
@@ -915,7 +919,7 @@ Fragment: ${fragment["@webstudio/instance/v0.1"].instances.length} instance(s), 
 Transaction: ${transaction.payload.length} namespaces
 ${summary}${tokensSummary}${bindingsSummary}${patternSummary}
 
-If OK, re-run with dryRun=false AND forceConfirmed=true.${tokenHintBlock}`);
+If OK, re-run with dryRun=false AND forceConfirmed=true.${tokenHintBlock}${bindingHintBlock}`);
     }
 
     try {
@@ -929,7 +933,7 @@ If OK, re-run with dryRun=false AND forceConfirmed=true.${tokenHintBlock}`);
         : "";
       return textResult(`push_complete to "${projectTitle}" (slug: ${pushTo.projectSlug})
 ${fragment["@webstudio/instance/v0.1"].instances.length} instance(s) — version → ${finalVersion}
-status: ${result.status}${refreshMsg}${tokensSummary}${bindingsSummary}${patternSummary}${tokenHintBlock}`);
+status: ${result.status}${refreshMsg}${tokensSummary}${bindingsSummary}${patternSummary}${tokenHintBlock}${bindingHintBlock}`);
     } catch (err) {
       return runtimeErrorResult(err, "Push failed");
     }

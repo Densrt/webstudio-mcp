@@ -2,6 +2,7 @@
 // Reproduces the auth pattern observed from the builder (cookies + csrf + sec-fetch headers).
 
 import type { Instance, Prop, StyleDecl, StyleSource, StyleSourceSelection, Breakpoint } from "./types.js";
+import { logTelemetry } from "./lib/telemetry.js";
 
 export class AuthExpiredError extends Error {
   constructor(public readonly httpStatus: number) {
@@ -199,7 +200,54 @@ export function commonHeaders(config: WebstudioConfig, withContent = false): Rec
 // block a tool call indefinitely.
 const HTTP_TIMEOUT_MS = 15_000;
 
-export async function fetchBuild(config: WebstudioConfig): Promise<WebstudioBuild> {
+// ── Build cache (v2.13.0) ───────────────────────────────────────────────────
+// Every tool used to re-download the FULL project build per call (~0.5-2s each,
+// 182 fetchBuild call sites — audit 2026-06-10). Agent workflows chain reads and
+// dry-runs against the same project within seconds, so a short-TTL in-memory
+// cache eliminates most of that latency with no correctness loss:
+//   - any push attempt invalidates the entry BEFORE hitting the network
+//     (server state about to change → next read must re-fetch);
+//   - pushWithRetry forces a fresh fetch on retries (version_mismatched means
+//     our snapshot is stale by definition);
+//   - reads are served a structuredClone — 182 call sites can mutate their
+//     copy freely without corrupting the cache;
+//   - staleness from EXTERNAL edits (user typing in the builder) is bounded by
+//     the TTL and, on push paths, self-heals via the version_mismatched retry.
+// Tune or disable via WEBSTUDIO_MCP_BUILD_CACHE_TTL_MS (0 disables).
+const BUILD_CACHE_TTL_MS = (() => {
+  const raw = process.env.WEBSTUDIO_MCP_BUILD_CACHE_TTL_MS;
+  if (raw === undefined || raw === "") return 30_000;
+  const n = Number(raw);
+  return Number.isFinite(n) && n >= 0 ? n : 30_000;
+})();
+
+const buildCache = new Map<string, { build: WebstudioBuild; fetchedAt: number }>();
+
+/** Drop the cached build for one project (or all projects when omitted). */
+export function invalidateBuildCache(projectId?: string): void {
+  if (projectId === undefined) buildCache.clear();
+  else buildCache.delete(projectId);
+}
+
+export type FetchBuildOptions = {
+  /** Bypass the cache and hit the network (push/retry paths). Default false. */
+  fresh?: boolean;
+};
+
+export async function fetchBuild(
+  config: WebstudioConfig,
+  opts: FetchBuildOptions = {},
+): Promise<WebstudioBuild> {
+  if (!opts.fresh && BUILD_CACHE_TTL_MS > 0) {
+    const cached = buildCache.get(config.projectId);
+    if (cached && Date.now() - cached.fetchedAt < BUILD_CACHE_TTL_MS) {
+      // Telemetry (opt-in): hit/miss ratio feeds the weekly report — tells us
+      // whether the 30s TTL is calibrated for real agent workflows.
+      void logTelemetry({ event: "build_cache", hit: true, projectId: config.projectId });
+      return structuredClone(cached.build);
+    }
+  }
+  void logTelemetry({ event: "build_cache", hit: false, fresh: opts.fresh === true, projectId: config.projectId });
   const url = `${origin(config.projectId)}/rest/data/${config.projectId}`;
   const res = await fetch(url, {
     headers: commonHeaders(config),
@@ -209,7 +257,11 @@ export async function fetchBuild(config: WebstudioConfig): Promise<WebstudioBuil
   if (!res.ok) {
     throw new Error(`fetchBuild failed: ${res.status} — ${(await res.text()).slice(0, 300)}`);
   }
-  return (await res.json()) as WebstudioBuild;
+  const build = (await res.json()) as WebstudioBuild;
+  if (BUILD_CACHE_TTL_MS > 0) {
+    buildCache.set(config.projectId, { build: structuredClone(build), fetchedAt: Date.now() });
+  }
+  return build;
 }
 
 export async function applyTransaction(
@@ -218,6 +270,9 @@ export async function applyTransaction(
   version: number,
   transaction: BuildPatchTransaction,
 ): Promise<PatchResult> {
+  // Server state is about to change (or may change even on failure — outcome
+  // unknown on thrown errors): drop the cached build up front.
+  invalidateBuildCache(config.projectId);
   const url = `${origin(config.projectId)}/trpc/build.patch?batch=1`;
   const body = JSON.stringify({
     "0": {
@@ -260,6 +315,18 @@ export async function applyTransaction(
  * `appVersionUpdated` is exposed so tools can persist the new version to the auth file
  * (otherwise the refresh is lost on the next run).
  */
+/**
+ * Delay before retry attempt N (1-based): exponential, base 250ms doubling per
+ * attempt, plus 0-40% jitter so concurrent agents don't re-collide on the same
+ * build version. Attempt 0 (first try) = no delay. Pure — `random` injectable
+ * for tests.
+ */
+export function retryDelayMs(attempt: number, random: () => number = Math.random): number {
+  if (attempt <= 0) return 0;
+  const base = 250 * 2 ** (attempt - 1);
+  return Math.round(base * (1 + 0.4 * random()));
+}
+
 export async function pushWithRetry(
   config: WebstudioConfig,
   regenerate: (build: WebstudioBuild) => BuildPatchTransaction,
@@ -290,7 +357,13 @@ export async function pushWithRetry(
   };
 
   for (let attempt = 0; attempt < maxRetries; attempt++) {
-    const build = await fetchBuild(config);
+    // Exponential backoff + jitter before each retry (v2.14.1 — retries were
+    // immediate, re-colliding with whatever just bumped the build version).
+    if (attempt > 0) await new Promise((r) => setTimeout(r, retryDelayMs(attempt)));
+    // Attempt 0 may serve from the build cache (a dry-run usually fetched the
+    // same build seconds ago; our own pushes invalidate it). Retries force a
+    // network fetch — version_mismatched means the snapshot is stale.
+    const build = await fetchBuild(config, { fresh: attempt > 0 });
     const transaction = regenerate(build);
     const result = await applyTransaction(config, build.id, build.version, transaction);
     if (result.status === "ok" || result.status === "partial") {

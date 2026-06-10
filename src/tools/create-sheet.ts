@@ -11,6 +11,8 @@ import type { ToolModule } from "./types.js";
 import { textResult, errorResult, authErrorResult, runtimeErrorResult } from "./types.js";
 import { requireAuth, requirePushAuth, saveAuth } from "../auth.js";
 import { fetchBuild, pushWithRetry } from "../webstudio-client.js";
+import { findReplaceTargets } from "../lib/find-replace-targets.js";
+import { buildReplaceMergeTransaction } from "../lib/replace-merge-transaction.js";
 import type {
   BuildPatchTransaction,
   BuildPatchChange,
@@ -18,8 +20,6 @@ import type {
 } from "../webstudio-client.js";
 import { FragmentBuilder } from "../builder.js";
 import { addSheet, type SheetLink } from "../components/sheet.js";
-import { fragmentToTransaction } from "../fragment-to-patches.js";
-import { buildInstanceRemovalChanges, buildParentChildrenPatch } from "../cleanup-helpers.js";
 import { parseStringToStyleValue } from "./define-css-var/parse-style-value.js";
 import type { StyleValue } from "../types.js";
 
@@ -273,26 +273,8 @@ Example: { projectSlug: "acme", parentInstanceId: "headerContainerId", links: [{
     // Idempotent replace: target the Dialog label AND the CSS embed label.
     const replaceLabels = [label, cssLabel];
 
-    const buildFullTransaction = (cur: WebstudioBuild, pid: string): BuildPatchTransaction => {
-      const baseTx = fragmentToTransaction(fragment, cur, { parentInstanceId: pid });
-      const targets = findReplaceTargets(cur, pid, replaceLabels);
-      if (targets.length === 0) return baseTx;
-      const cleanupChanges = buildInstanceRemovalChanges(cur, targets);
-      const instCleanup = cleanupChanges.find((c) => c.namespace === "instances");
-      if (instCleanup) instCleanup.patches.unshift(buildParentChildrenPatch(cur, pid, targets));
-      const merged: BuildPatchChange[] = [];
-      const seen = new Set<string>();
-      for (const c of cleanupChanges) {
-        const fragChange = baseTx.payload.find((bc) => bc.namespace === c.namespace);
-        if (fragChange) merged.push({ namespace: c.namespace, patches: [...c.patches, ...fragChange.patches] });
-        else merged.push(c);
-        seen.add(c.namespace);
-      }
-      for (const bc of baseTx.payload) {
-        if (!seen.has(bc.namespace)) merged.push(bc);
-      }
-      return { id: baseTx.id, payload: merged };
-    };
+    const buildFullTransaction = (cur: WebstudioBuild, pid: string): BuildPatchTransaction =>
+      buildReplaceMergeTransaction(fragment, cur, pid, replaceLabels);
 
     const existingTargets = findReplaceTargets(build, parentInstanceId, replaceLabels);
     const replaceInfo = existingTargets.length
@@ -343,20 +325,3 @@ IDs:
   },
 };
 
-function findReplaceTargets(
-  build: WebstudioBuild,
-  parentId: string,
-  labels: string[],
-): string[] {
-  const parent = build.instances.find((i) => i.id === parentId);
-  if (!parent) return [];
-  const labelSet = new Set(labels);
-  const found: string[] = [];
-  for (const c of parent.children) {
-    if (c.type !== "id") continue;
-    const inst = build.instances.find((i) => i.id === c.value);
-    if (!inst || !inst.label || !labelSet.has(inst.label)) continue;
-    found.push(inst.id);
-  }
-  return found;
-}

@@ -5,6 +5,27 @@ privately before its first public release, so the history below starts at the fi
 public version. Format inspired by [Keep a Changelog](https://keepachangelog.com/),
 versioning per [SemVer](https://semver.org/).
 
+## [2.20.0] — 2026-06-10
+
+- feat(resources): method-aware create — form actions are standalone (no dataSource, no cache header)
+- feat(guards): global anti-pattern audit — Video coerce, show-binding lint, shared-subtree delete guard
+- feat(images): raw <img> eradication — auto-convert to the native Image component everywhere
+- chore(deps): engines >=20 + zod4 migration path documented (timeboxed no-go)
+- perf(wire,snapshot): $defs dedupe (-13k chars wire) + warm browser + canvas polling
+- feat(instances): append batch form — N simple children in ONE transaction
+- feat(surface): reduced tool-surface mode via WEBSTUDIO_MCP_TOOLS allowlist
+- feat(hardening): wire-budget CI guard, build-cache telemetry, retry backoff, registry comments
+- feat(reads): bounded responses (tokens limit, audit.page maxChars) + structuredContent on get_decls
+- refactor(lib): dedupe findReplaceTargets, Binding Zod schemas, replace-merge engine
+- perf(core): build cache + lazy playwright + BM25 corpus cache
+- feat(schema): wire-schema economy — one-line action summaries + xActions stripped from tools/list
+- feat(expressions): lint raw binding expressions against Webstudio's allowlist
+- chore: sync package-lock.json to v2.10.10
+- fix(release): bump.mjs detects SERVER_VERSION via regex test (idempotent on same version)
+- docs(changelog): public changelog entry for v2.10.10
+- docs(changelog): backfill 2.10.8 and 2.10.9 entries
+- fix(state): coerce state selector on all style write paths
+
 ## [2.10.10] — 2026-06-03
 
 - fix(state): coerce the `state` selector on every style write path — a bare `"hover"` (no colon) was stored as a dead state that never triggered; recoverable forms (`"hover"`, `":Hover"`, `":before"`) are now coerced to canonical + hinted, unknown states rejected. New pattern `state-selector-format`.

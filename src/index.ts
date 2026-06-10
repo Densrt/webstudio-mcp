@@ -12,6 +12,8 @@ import {
 
 import type { ToolModule } from "./tools/types.js";
 import { textResult } from "./tools/types.js";
+import { toWireToolDefinition } from "./lib/mega-tool.js";
+import { applyToolFilter } from "./lib/tool-filter.js";
 import { listPatternResources, readPatternResource } from "./resources.js";
 import { logTelemetry } from "./lib/telemetry.js";
 
@@ -58,45 +60,64 @@ import { cmsTool } from "./tools/cms-mega.js";
 
 // ─── Project lifecycle (atomic source files — consolidated in projectTool mega-tool) ──
 
-const TOOLS: ToolModule[] = [
-  // v1.0 mega-tools — auth + project + read
-  authTool,                // 3 actions: setup | allow_push | update_app_version
-  projectTool,             // 5 actions: init | list | export | nuke | import_figma
-  readTool,                // 5 actions: fetch_pages | list_instances | read_texts | inspect | snapshot
+// NOTE: no per-tool action enumerations here — they drift (the 2026-06-10
+// audit found 4 stale counts). The authoritative list is each mega-tool's
+// xActions (live via meta.index) — comments below only state the domain.
+const ALL_TOOLS: ToolModule[] = [
+  authTool,                // local Webstudio credential management
+  projectTool,             // project lifecycle (init / export / nuke / Figma import)
+  readTool,                // read-only build inspection + canvas snapshots
 
-  // Build & instances — v1.0 mega-tools
-  buildTool,               // 6 actions: build_fragment | push_fragment | push_complete | create_sheet | create_navigation_menu | push_html
-  instancesTool,           // 11 actions: append | delete | clone | clone_page | wrap | flatten | update_label | update_text | prop_update | prop_delete | prop_bind
+  buildTool,               // fragment construction + push (cloud mutation entry point)
+  instancesTool,           // instance tree operations (append/delete/clone/wrap/props…)
 
-  // Pages — v1.0 mega-tool (create | update | delete | list_folders | delete_folder)
-  pagesTool,
+  pagesTool,               // page + folder lifecycle, project-level meta
 
-  // Styles / tokens / cssvar — v1.0 mega-tools
-  stylesMegaTool,          // 4 actions: get_decls | update | delete_decl | replace_value (LOCAL only — not tokens)
-  tokensTool,              // 16 actions: define_local | list_local | init_brand_kit | sync_local | create_tokens | list_tokens_cloud | update_token_styles | attach_token | detach_token | extract_token | extract_variant | delete_token | bulk_rename_token_names | migrate_token_selections | dedupe_locals | cleanup_orphan_locals
-  cssvarTool,              // 4 actions: define | list | delete | rewrite_refs
+  stylesMegaTool,          // LOCAL style declarations (tokens live in tokensTool)
+  tokensTool,              // design token lifecycle (local registry + cloud)
+  cssvarTool,              // project-level :root CSS variables
 
-  // Variables & resources — v1.0 mega-tools
-  variablesTool,           // 5 actions: create | list | update | delete | bind_page_field
-  resourcesTool,           // 4 actions: create | list | update | delete
+  variablesTool,           // in-page state variables
+  resourcesTool,           // SSR HTTP resources (REST endpoints + dataSources)
 
-  // Assets — v1.0 mega-tool
-  assetsTool,              // 5 actions: upload | list | find_usage | replace | delete
+  assetsTool,              // asset lifecycle (images, fonts — sha256-addressed)
 
-  // Audits — v1.0 mega-tool (action:"page" absorbs auditPageTool, 12 other kinds are READ-ONLY actions)
-  auditMegaTool,           // 13 actions: page | overflow | local_styles | token_usage | token_overlap | orphans | assets | fonts | images | scripts | resources_perf | diff_pages_tokens | radix_trigger_pollution
+  auditMegaTool,           // project audits (all READ-ONLY)
 
-  // CMS — v1.0 mega-tool (Directus, killer feature: bind_collection_to_instance)
-  cmsTool,                 // 7 actions: list_collections | discover_schema | list_items | create_item | update_item | delete_item | bind_collection_to_instance
+  cmsTool,                 // CMS integration (Directus adapter)
 ];
 
-// Prepend the meta mega-tool (action:index sees the final list — closure pattern).
+// Reduced surface mode (v2.15.0): WEBSTUDIO_MCP_TOOLS="meta,read,audit"
+// registers only the named tools — safety + ~3x cheaper handshake for
+// read-only routines. Unset = full surface (unchanged default).
+const toolFilter = applyToolFilter(
+  ALL_TOOLS.map((t) => t.definition.name),
+  process.env.WEBSTUDIO_MCP_TOOLS,
+);
+const TOOLS: ToolModule[] = toolFilter.active
+  ? ALL_TOOLS.filter((t) => toolFilter.keep.has(t.definition.name))
+  : [...ALL_TOOLS];
+
+// Prepend the meta mega-tool — ALWAYS registered (discovery is core); its
+// index/guide reflect the filtered list via the closure.
 TOOLS.unshift(makeMetaTool(() => TOOLS));
+
+if (toolFilter.unknown.length > 0) {
+  process.stderr.write(
+    `[webstudio-mcp] WEBSTUDIO_MCP_TOOLS: unknown tool name(s) ignored: ${toolFilter.unknown.join(", ")} ` +
+      `(known: meta, ${ALL_TOOLS.map((t) => t.definition.name).join(", ")})\n`,
+  );
+}
+if (toolFilter.active && toolFilter.keep.size === 0) {
+  process.stderr.write(
+    `[webstudio-mcp] WEBSTUDIO_MCP_TOOLS matched no known tool — fail-safe: only "meta" is registered.\n`,
+  );
+}
 
 const handlers = new Map(TOOLS.map((t) => [t.definition.name, t.handler]));
 
 const SERVER_NAME = "webstudio";
-const SERVER_VERSION = "2.10.10";
+const SERVER_VERSION = "2.20.0";
 
 // MCP `instructions` — sent once at handshake (per the MCP spec, the host can
 // surface these to the model as a system-level preamble). Use it for cross-cutting
@@ -109,6 +130,7 @@ const SERVER_INSTRUCTIONS = `Webstudio MCP v${SERVER_VERSION} — workflow rules
 3. **Overlay over background image** → \`backgroundImage: { type:"layers", value:[gradient, image] }\` on the element itself. Do NOT nest absolute-positioned divs. Do NOT use \`box-shadow\` as an overlay.
 4. **Local vs token.** \`styles.update\` writes LOCAL overrides — for 2+ instances sharing decls, prefer \`tokens.create_tokens\` / \`tokens.update_token_styles\` then \`tokens.dedupe_locals\`. See pattern component-architecture.
 5. **Dry-run by default.** Most mutating tools default to \`dryRun: true\`. Inspect the patch list before pushing.
+6. **Images = native \`Image\` component.** \`src\` accepts an asset id, a URL string, or an expression — NEVER \`ws:element\` with \`tag:"img"\` (push paths auto-convert those). Upload via \`assets.upload\` first when possible (srcset + optimization). See pattern image-component.
 `;
 
 const server = new Server(
@@ -119,8 +141,12 @@ const server = new Server(
   },
 );
 
+// Wire-schema economy (v2.12.0): the non-standard `xActions` metadata stays
+// in-memory (meta mega-tool + guard tests read it from TOOLS) but is stripped
+// from what clients receive — it duplicated every action description on the
+// wire (~57k tokens measured for the 15-tool handshake in v2.11.0).
 server.setRequestHandler(ListToolsRequestSchema, async () => ({
-  tools: TOOLS.map((t) => t.definition),
+  tools: TOOLS.map((t) => toWireToolDefinition(t.definition)),
 }));
 
 // MCP resources — expose docs/patterns/*.md at webstudio://patterns/<slug>.
@@ -203,4 +229,5 @@ await server.connect(transport);
 
 // Boot banner on stderr (stdout reserved for MCP framing). Surfaces the running
 // version in `claude mcp logs` and host UIs that pipe stderr → debug pane.
-process.stderr.write(`[${SERVER_NAME}-mcp] v${SERVER_VERSION} started — ${TOOLS.length} tools registered\n`);
+const filterNote = toolFilter.active ? ` (WEBSTUDIO_MCP_TOOLS filter active — full surface: ${ALL_TOOLS.length + 1})` : "";
+process.stderr.write(`[${SERVER_NAME}-mcp] v${SERVER_VERSION} started — ${TOOLS.length} tools registered${filterNote}\n`);
