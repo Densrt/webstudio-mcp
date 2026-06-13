@@ -54,23 +54,23 @@ test("WordPress single-site config — refuses named source", async () => {
     appPassword: "xxxx",
   }));
   await assert.rejects(
-    () => loadAdapter("crs"),
-    /single-site format but source "wordpress:crs"/,
+    () => loadAdapter("blog"),
+    /single-site format but source "wordpress:blog"/,
   );
 });
 
 test("WordPress multi-site config — single entry, no name → picks default", async () => {
   await writeConfig(JSON.stringify({
-    sites: { crs: { baseUrl: "https://crs.com", username: "admin", appPassword: "xxxx" } },
+    sites: { blog: { baseUrl: "https://blog.example.com", username: "admin", appPassword: "xxxx" } },
   }));
   const adapter = await loadAdapter(undefined);
-  assert.equal(adapter.name, "wordpress:crs");
+  assert.equal(adapter.name, "wordpress:blog");
 });
 
 test("WordPress multi-site config — multi entries, no name → refuses", async () => {
   await writeConfig(JSON.stringify({
     sites: {
-      crs: { baseUrl: "https://crs.com", username: "u", appPassword: "p" },
+      blog: { baseUrl: "https://blog.example.com", username: "u", appPassword: "p" },
       "dealer-1": { baseUrl: "https://d1.com", username: "u", appPassword: "p" },
     },
   }));
@@ -83,7 +83,7 @@ test("WordPress multi-site config — multi entries, no name → refuses", async
 test("WordPress multi-site config — named source resolves", async () => {
   await writeConfig(JSON.stringify({
     sites: {
-      crs: { baseUrl: "https://crs.com", username: "u", appPassword: "p" },
+      blog: { baseUrl: "https://blog.example.com", username: "u", appPassword: "p" },
       "dealer-1": { baseUrl: "https://d1.com", username: "u", appPassword: "p" },
     },
   }));
@@ -94,21 +94,21 @@ test("WordPress multi-site config — named source resolves", async () => {
 test("WordPress multi-site config — unknown name → clear error", async () => {
   await writeConfig(JSON.stringify({
     sites: {
-      crs: { baseUrl: "https://crs.com", username: "u", appPassword: "p" },
+      blog: { baseUrl: "https://blog.example.com", username: "u", appPassword: "p" },
     },
   }));
   await assert.rejects(
     () => loadAdapter("ghost"),
-    /no site named "ghost"\. Available: crs/,
+    /no site named "ghost"\. Available: blog/,
   );
 });
 
 test("WordPress resourceUrl follows REST convention", async () => {
   await writeConfig(JSON.stringify({
-    baseUrl: "https://crs.com/",
+    baseUrl: "https://blog.example.com/",
     username: "u",
     appPassword: "p",
   }));
   const adapter = await loadAdapter(undefined);
-  assert.equal(adapter.resourceUrl("posts"), "https://crs.com/wp-json/wp/v2/posts");
+  assert.equal(adapter.resourceUrl("posts"), "https://blog.example.com/wp-json/wp/v2/posts");
 });

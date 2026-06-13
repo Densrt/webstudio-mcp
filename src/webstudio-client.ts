@@ -200,25 +200,31 @@ export function commonHeaders(config: WebstudioConfig, withContent = false): Rec
 // block a tool call indefinitely.
 const HTTP_TIMEOUT_MS = 15_000;
 
-// ── Build cache (v2.13.0) ───────────────────────────────────────────────────
+// ── Build cache (v2.13.0; TTL raised v2.20.2) ──────────────────────────────
 // Every tool used to re-download the FULL project build per call (~0.5-2s each,
-// 182 fetchBuild call sites — audit 2026-06-10). Agent workflows chain reads and
-// dry-runs against the same project within seconds, so a short-TTL in-memory
-// cache eliminates most of that latency with no correctness loss:
+// ~92 fetchBuild call sites across 87 files — recount 2026-06-11). Agent
+// workflows chain reads and dry-runs against the same project within seconds,
+// so a short-TTL in-memory cache eliminates most of that latency with no
+// correctness loss:
 //   - any push attempt invalidates the entry BEFORE hitting the network
 //     (server state about to change → next read must re-fetch);
+//   - asset uploads invalidate too (v2.20.2) — /rest/assets POSTs mutate the
+//     server-side build outside the trpc patch path;
 //   - pushWithRetry forces a fresh fetch on retries (version_mismatched means
 //     our snapshot is stale by definition);
-//   - reads are served a structuredClone — 182 call sites can mutate their
+//   - reads are served a structuredClone — call sites can mutate their
 //     copy freely without corrupting the cache;
 //   - staleness from EXTERNAL edits (user typing in the builder) is bounded by
 //     the TTL and, on push paths, self-heals via the version_mismatched retry.
+// Default 120s (was 30s): the server offers no HTTP revalidation (Cache-Control:
+// private, no-store; no ETag), so this TTL is the only read-dedup lever, and
+// every mutation path above invalidates eagerly.
 // Tune or disable via WEBSTUDIO_MCP_BUILD_CACHE_TTL_MS (0 disables).
 const BUILD_CACHE_TTL_MS = (() => {
   const raw = process.env.WEBSTUDIO_MCP_BUILD_CACHE_TTL_MS;
-  if (raw === undefined || raw === "") return 30_000;
+  if (raw === undefined || raw === "") return 120_000;
   const n = Number(raw);
-  return Number.isFinite(n) && n >= 0 ? n : 30_000;
+  return Number.isFinite(n) && n >= 0 ? n : 120_000;
 })();
 
 const buildCache = new Map<string, { build: WebstudioBuild; fetchedAt: number }>();
@@ -232,7 +238,26 @@ export function invalidateBuildCache(projectId?: string): void {
 export type FetchBuildOptions = {
   /** Bypass the cache and hit the network (push/retry paths). Default false. */
   fresh?: boolean;
+  /**
+   * Return the cached build deep-frozen, WITHOUT cloning (v2.20.2). Pure-read
+   * tools should opt in: a structuredClone of a multi-MB build per cache hit
+   * is the single largest per-call CPU cost on read chains. Frozen objects
+   * turn latent cache-corrupting mutations into loud TypeErrors (strict-mode
+   * ESM). Readonly returns are frozen even when the cache is disabled so the
+   * guarantee does not depend on TTL configuration. Default false.
+   */
+  readonly?: boolean;
 };
+
+/** Recursive Object.freeze (Object.freeze alone is shallow). Cycle-safe via frozen-check. */
+function deepFreeze<T>(value: T): T {
+  if (value === null || typeof value !== "object" || Object.isFrozen(value)) return value;
+  Object.freeze(value);
+  for (const key of Object.getOwnPropertyNames(value)) {
+    deepFreeze((value as Record<string, unknown>)[key]);
+  }
+  return value;
+}
 
 export async function fetchBuild(
   config: WebstudioConfig,
@@ -242,9 +267,12 @@ export async function fetchBuild(
     const cached = buildCache.get(config.projectId);
     if (cached && Date.now() - cached.fetchedAt < BUILD_CACHE_TTL_MS) {
       // Telemetry (opt-in): hit/miss ratio feeds the weekly report — tells us
-      // whether the 30s TTL is calibrated for real agent workflows.
+      // whether the TTL default is calibrated for real agent workflows.
       void logTelemetry({ event: "build_cache", hit: true, projectId: config.projectId });
-      return structuredClone(cached.build);
+      // The stored copy is deep-frozen at store time; readonly callers share
+      // it directly. structuredClone of a frozen object yields a mutable clone,
+      // so non-readonly callers are unaffected.
+      return opts.readonly ? cached.build : structuredClone(cached.build);
     }
   }
   void logTelemetry({ event: "build_cache", hit: false, fresh: opts.fresh === true, projectId: config.projectId });
@@ -259,9 +287,11 @@ export async function fetchBuild(
   }
   const build = (await res.json()) as WebstudioBuild;
   if (BUILD_CACHE_TTL_MS > 0) {
-    buildCache.set(config.projectId, { build: structuredClone(build), fetchedAt: Date.now() });
+    const stored = deepFreeze(structuredClone(build));
+    buildCache.set(config.projectId, { build: stored, fetchedAt: Date.now() });
+    if (opts.readonly) return stored;
   }
-  return build;
+  return opts.readonly ? deepFreeze(build) : build;
 }
 
 export async function applyTransaction(

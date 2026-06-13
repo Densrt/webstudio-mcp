@@ -1,6 +1,6 @@
 // Coerce raw <img> instances to the native Image component (v2.18.0).
 //
-// Cas réel (Denis, 2026-06-10): callers systematically pushed
+// Real case (2026-06-10): callers systematically pushed
 // `ws:element` + `tag:"img"` instead of the native `Image` component. Root
 // cause: the debunked "Image requires an asset id" myth (see pattern
 // image-component — `Image.src` accepts asset | URL string | expression),

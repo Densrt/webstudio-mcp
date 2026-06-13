@@ -11,12 +11,12 @@ test("getAdapterBySource: rejects unknown adapter type", async () => {
   );
 });
 
-test("getAdapterBySource: parses 'wordpress:crs' into type+name", async () => {
+test("getAdapterBySource: parses 'wordpress:blog' into type+name", async () => {
   // Adapter factory will throw because no config file exists, but we can assert
   // that it tries to load the WP config (and not the Directus or n8n one) via
   // the error message.
   await assert.rejects(
-    () => getAdapterBySource("wordpress:crs"),
+    () => getAdapterBySource("wordpress:blog"),
     /WordPress config missing/,
   );
 });

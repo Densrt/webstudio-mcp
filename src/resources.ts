@@ -4,9 +4,9 @@
 // only accessible via the webstudio_describe_pattern tool. With resources://, the LLM
 // can cite them passively without a tool call — same approach as Notion v2 / Linear MCPs.
 
-import { readdirSync, readFileSync, statSync } from "node:fs";
-import { dirname, join, resolve } from "node:path";
-import { fileURLToPath } from "node:url";
+import { readdirSync, readFileSync } from "node:fs";
+import { join } from "node:path";
+import { findPatternsDir } from "./lib/patterns-dir.js";
 
 export type PatternResource = {
   slug: string;
@@ -22,21 +22,6 @@ export type PatternResource = {
   mimeType: string;
   path: string;
 };
-
-function findPatternsDir(): string | null {
-  const here = dirname(fileURLToPath(import.meta.url));
-  const candidates = [
-    resolve(here, "../docs/patterns"),     // dist/resources.js → repo root
-    resolve(here, "../../docs/patterns"),  // src/resources.ts via ts-node
-    resolve(process.cwd(), "docs/patterns"),
-  ];
-  for (const p of candidates) {
-    try {
-      if (statSync(p).isDirectory()) return p;
-    } catch { /* skip */ }
-  }
-  return null;
-}
 
 function extractFrontmatter(body: string): {
   name?: string;
@@ -86,7 +71,9 @@ export function listPatternResources(): PatternResource[] {
     const slug = entry.replace(/\.md$/, "");
     const path = join(dir, entry);
     let body = "";
-    try { body = readFileSync(path, "utf8"); } catch { continue; }
+    // Normalize CRLF: Windows checkouts (git autocrlf) would otherwise defeat
+    // the LF-only frontmatter regex and ship 200-char fallback descriptions.
+    try { body = readFileSync(path, "utf8").replace(/\r\n/g, "\n"); } catch { continue; }
     const { name, description, category, complexity, recommendedTool, recommendedToolNote, rest } = extractFrontmatter(body);
     // Fallback: first heading or filename
     const firstHeading = rest.match(/^#\s+(.+)$/m)?.[1];
@@ -116,7 +103,7 @@ export function readPatternResource(uri: string): { contents: Array<{ uri: strin
   const resources = listPatternResources();
   const res = resources.find((r) => r.slug === slug);
   if (!res) return null;
-  const text = readFileSync(res.path, "utf8");
+  const text = readFileSync(res.path, "utf8").replace(/\r\n/g, "\n");
   return {
     contents: [{
       uri: res.uri,

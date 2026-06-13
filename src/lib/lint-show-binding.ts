@@ -1,6 +1,6 @@
 // Lint data-ws-show bindings: the value MUST be boolean (v2.19.0).
 //
-// Cas réel (incident template multi-concess, 2026-06-10): a numeric
+// Real case (a multi-tenant template, 2026-06-10): a numeric
 // expression (`….length`) bound to data-ws-show leaks a literal "0" as TEXT
 // on the live page instead of hiding the element. The 2026-06-10 sweep also
 // found bare field accesses (`$ws$dataSource$X.data.champ`) used as show

@@ -77,7 +77,7 @@ export const collectionComponent = "ws:collection";
     "instanceId": "<collectionId>",
     "name": "data",
     "type": "expression",
-    "value": "[{\"brand\":\"Acme\",\"model\":\"CFORCE 520\",\"price\":\"8 990 €\"},{...},{...}]"
+    "value": "[{\"brand\":\"Acme\",\"model\":\"Trail 520\",\"price\":\"8 990 €\"},{...},{...}]"
   },
   {
     "instanceId": "<collectionId>",
@@ -147,9 +147,9 @@ const brandTextId = newId();
 const itemParamId = newId();   // ← the item's dataSourceId
 
 const occasions = [
-  { id: "1", brand: "Acme", model: "CFORCE 520",          year: 2023, km: "1 800 km", price: "8 990 €",  image: "https://...", url: "#" },
-  { id: "2", brand: "Acme", model: "CFORCE 1000 Expert",  year: 2024, km: "850 km",   price: "13 500 €", image: "https://...", url: "#" },
-  { id: "3", brand: "Acme", model: "CFORCE 850 Expert",   year: 2022, km: "4 200 km", price: "10 900 €", image: "https://...", url: "#" },
+  { id: "1", brand: "Acme", model: "Trail 520",          year: 2023, km: "1 800 km", price: "8 990 €",  image: "https://...", url: "#" },
+  { id: "2", brand: "Acme", model: "Trail 1000 Expert",  year: 2024, km: "850 km",   price: "13 500 €", image: "https://...", url: "#" },
+  { id: "3", brand: "Acme", model: "Trail 850 Expert",   year: 2022, km: "4 200 km", price: "10 900 €", image: "https://...", url: "#" },
 ];
 
 // 2. push_fragment payload

@@ -86,7 +86,11 @@ const DESCRIPTION_DETAIL_MARKERS = [
   " [PATTERN]",
 ];
 
-const SUMMARY_HARD_CAP = 220;
+// v2.20.3: 110 (was 220) — the joined summary lines are the single largest
+// prose block on the wire (~23 kB across 108 actions at the old cap). Leads
+// longer than the cap get ellipsis-truncated; keep "Use when:" leads ≤~100
+// chars in the action definitions so nothing truncates mid-thought.
+const SUMMARY_HARD_CAP = 110;
 
 /**
  * Compress a full action description to its one-line lead for the wire schema.
@@ -94,7 +98,7 @@ const SUMMARY_HARD_CAP = 220;
  * - Cuts at the first canonical detail marker (Do NOT use when / Returns /
  *   Side effects / Example) — the "Use when:" lead must be self-sufficient.
  * - Short free-form descriptions (no markers) pass through unchanged.
- * - Hard cap at 220 chars as a backstop for non-canonical descriptions.
+ * - Hard cap at SUMMARY_HARD_CAP chars as a backstop for long leads.
  * - The "CRITICAL — context required" safety marker is always preserved (the
  *   agent must see it BEFORE calling, not after a CONTEXT_REQUIRED error).
  *
@@ -148,12 +152,94 @@ export function toWireToolDefinition<T extends { inputSchema: object }>(definiti
   return wire;
 }
 
+// Annotation keys that never change what validates: differences in these must
+// not fork an `anyOf` variant (v2.20.3 — default/examples-only forks shipped
+// 12 two-variant anyOfs across 10 tools, ~2.9 kB of duplicated shapes).
+const SHAPE_ANNOTATION_KEYS = new Set(["description", "default", "examples"]);
+
+/**
+ * Structural equality of two JSON-schema fragments, ignoring annotation-only
+ * keys (description/default/examples) at every level. Two schemas that
+ * validate identically are the same variant — annotation-only differences
+ * must not fork an `anyOf` (first description wins; conflicting defaults are
+ * dropped by dropConflictingDefaults).
+ */
+function schemaShapeEquals(a: unknown, b: unknown): boolean {
+  if (a === b) return true;
+  if (Array.isArray(a) || Array.isArray(b)) {
+    if (!Array.isArray(a) || !Array.isArray(b) || a.length !== b.length) return false;
+    return a.every((v, i) => schemaShapeEquals(v, b[i]));
+  }
+  if (typeof a === "object" && a !== null && typeof b === "object" && b !== null) {
+    const ka = Object.keys(a).filter((k) => !SHAPE_ANNOTATION_KEYS.has(k)).sort();
+    const kb = Object.keys(b).filter((k) => !SHAPE_ANNOTATION_KEYS.has(k)).sort();
+    if (ka.length !== kb.length) return false;
+    return ka.every(
+      (k, i) =>
+        k === kb[i] &&
+        schemaShapeEquals((a as Record<string, unknown>)[k], (b as Record<string, unknown>)[k]),
+    );
+  }
+  return false;
+}
+
+const jsonEquals = (a: unknown, b: unknown): boolean => JSON.stringify(a) === JSON.stringify(b);
+
+/**
+ * `kept` and `incoming` are shape-equal modulo annotations. Where they
+ * disagree on `default` (different values, or only one side advertises one),
+ * the merged schema must NOT advertise any default: e.g. build.pushTo's
+ * nested dryRun runtime-defaults false for push_fragment but true for
+ * push_complete — advertising either could trigger an unintended live push.
+ * Copy-on-write: returns `kept` untouched when nothing conflicts (the
+ * fragments are module-scope zod-to-json-schema output shared with xActions).
+ * Descriptions and examples stay first-wins.
+ */
+function dropConflictingDefaults(kept: unknown, incoming: unknown): unknown {
+  if (Array.isArray(kept) && Array.isArray(incoming)) {
+    let changed = false;
+    const out = kept.map((v, i) => {
+      const r = dropConflictingDefaults(v, incoming[i]);
+      if (r !== v) changed = true;
+      return r;
+    });
+    return changed ? out : kept;
+  }
+  if (kept !== null && incoming !== null && typeof kept === "object" && typeof incoming === "object") {
+    const k = kept as Record<string, unknown>;
+    const inc = incoming as Record<string, unknown>;
+    let out: Record<string, unknown> | null = null;
+    if ("default" in k && (!("default" in inc) || !jsonEquals(k.default, inc.default))) {
+      out = { ...k };
+      delete out.default;
+    }
+    for (const key of Object.keys(k)) {
+      if (SHAPE_ANNOTATION_KEYS.has(key)) continue;
+      const r = dropConflictingDefaults(k[key], inc[key]);
+      if (r !== k[key]) {
+        out = out ?? { ...k };
+        out[key] = r;
+      }
+    }
+    return out ?? kept;
+  }
+  return kept;
+}
+
 /**
  * Build the JSON Schema for a mega-tool's `inputSchema`. Returns a **flat** schema:
  *   - `action`: enum of all branch discriminator values, description lists each
  *     variant's one-line summary (full docs live in `xActions` / meta.get_more_tools)
  *   - `label`: 3-30 chars action label
- *   - all branch properties merged by name (first-wins on conflicts)
+ *   - all branch properties merged by name. When two actions advertise the SAME
+ *     key with DIFFERENT shapes (e.g. instances' `updates[]` item is
+ *     {instanceId,label} for update_label but {instanceId,text} for update_text),
+ *     the property becomes a nested `anyOf` of the distinct shapes, each variant
+ *     tagged with the action(s) it applies to. First-wins merging here made
+ *     update_text/prop_update UNCALLABLE (v2.20.0 incident: the advertised item
+ *     shape required `label`, which the sub-handler rejects — no payload could
+ *     satisfy both). Nested anyOf is fine — only TOP-LEVEL oneOf/allOf/anyOf is
+ *     rejected by the Anthropic API, and zod unions already emit nested anyOf.
  *   - `required: ["action", "label"]` — per-action required fields are enforced at
  *     runtime by the Zod discriminated union, not by JSON Schema (the API rejects
  *     `oneOf` at the top level so we can't express per-branch required[] there).
@@ -165,42 +251,79 @@ export function buildJsonSchemaForActions(actions: ActionDef[]): MegaToolInputSc
     throw new Error("buildJsonSchemaForActions: at least 1 action required");
   }
   const actionEnum = actions.map((a) => a.action);
+  // Per-tool wire prose is paid ×15 every session — keep these descriptions
+  // one line each; the full context policy and the get_more_tools pointer live
+  // once in SERVER_INSTRUCTIONS (src/index.ts).
+  // Bare `name — summary` lines (the action="..." prefix cost ~1 kB over 108
+  // actions). NOTE: the action="..." tags inside anyOf VARIANT descriptions
+  // (see below) are load-bearing for variant→action mapping and keep the prefix.
   const actionDescription = actions
-    .map((a) => `action="${a.action}" — ${summarizeActionDescription(a.description)}`)
-    .join("\n")
-    + `\n\nFull docs for one action (params, redirections, example): meta.get_more_tools({brief:"<tool>.<action>"}).`;
+    .map((a) => `${a.action} — ${summarizeActionDescription(a.description)}`)
+    .join("\n");
   const properties: Record<string, object> = {
     action: { type: "string", enum: actionEnum, description: actionDescription },
     label: {
       type: "string",
       minLength: 3,
       maxLength: 30,
-      description: "Action label (3-30 chars, must be unique within a multi-action call).",
+      description: "Short unique label for this call.",
     },
     // `context` is mega-tool-level (declared in each mega-tool's Base Zod). Optional in
     // the JSON schema because the API rejects top-level oneOf/allOf/anyOf — we cannot
     // express "required IFF tier=CRITICAL" via the schema. The runtime validator
-    // (lib/context-validator.ts) enforces the tier-based requirement and returns
+    // (lib/context-validator.ts) enforces the tier-based requirement (and the
+    // PII/secrets/third-person policy stated in SERVER_INSTRUCTIONS) and returns
     // CONTEXT_REQUIRED_FOR_CRITICAL when missing for a CRITICAL action.
     //
-    // Without this property, `additionalProperties:false` rejects `context` before it
-    // reaches the server (incident 2026-05-26: instances.delete unusable from the
-    // caller despite the description listing context in the example).
+    // INCIDENT 2026-05-26: `context` must STAY a declared property here — without
+    // it, `additionalProperties:false` rejects `context` client-side before it
+    // reaches the server (instances.delete was unusable despite the description
+    // listing context in the example). Only the description may shrink.
     context: {
       type: "string",
       minLength: 60,
       maxLength: 200,
       description:
-        "15-25 word third-person summary of WHY this call is being made. REQUIRED for CRITICAL actions (delete/replace/nuke/bulk_rename/migrate_token_selections — see each action's description for the explicit \"CRITICAL — context required\" marker). Recommended for STRUCTURING actions (returns a hint if missing). Optional for TACTICAL / READ-ONLY. No PII (no email/IP), no secrets (no token/password/api-key), no first-person pronouns (use \"the caller wants to...\" or \"the agent will...\").",
+        "Third-person reason for this call (15-25 words). REQUIRED for actions marked CRITICAL. See server instructions for the policy.",
     },
   };
+  // Collect the distinct shapes each key is advertised with across actions.
+  type PropertyVariant = { schema: Record<string, unknown>; actions: string[] };
+  const variantsByKey = new Map<string, PropertyVariant[]>();
   for (const a of actions) {
     for (const [key, propSchema] of Object.entries(a.schema)) {
-      if (key === "action" || key === "label") continue;
-      if (!(key in properties) && propSchema !== null && typeof propSchema === "object") {
-        properties[key] = propSchema as object;
+      // action/label/context are mega-tool-level — defined above, never overridden.
+      if (key === "action" || key === "label" || key === "context") continue;
+      if (propSchema === null || typeof propSchema !== "object") continue;
+      let variants = variantsByKey.get(key);
+      if (!variants) {
+        variants = [];
+        variantsByKey.set(key, variants);
+      }
+      const existing = variants.find((v) => schemaShapeEquals(v.schema, propSchema));
+      if (existing) {
+        existing.actions.push(a.action);
+        existing.schema = dropConflictingDefaults(existing.schema, propSchema) as Record<string, unknown>;
+      } else {
+        variants.push({ schema: propSchema as Record<string, unknown>, actions: [a.action] });
       }
     }
+  }
+  for (const [key, variants] of variantsByKey) {
+    if (variants.length === 1) {
+      properties[key] = variants[0].schema;
+      continue;
+    }
+    properties[key] = {
+      description: "Shape depends on `action` — use the anyOf variant whose description names your action.",
+      anyOf: variants.map((v) => {
+        const applies = `[${v.actions.map((x) => `action="${x}"`).join(", ")}]`;
+        const desc = typeof v.schema.description === "string" && v.schema.description.length > 0
+          ? `${applies} ${v.schema.description}`
+          : applies;
+        return { ...v.schema, description: desc };
+      }),
+    };
   }
   const xActions: ActionMeta[] = actions.map((a) => ({
     action: a.action,

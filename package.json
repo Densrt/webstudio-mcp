@@ -1,19 +1,20 @@
 {
   "name": "@densrt/webstudio-mcp",
-  "version": "2.20.0",
+  "version": "2.21.1",
   "description": "Unofficial MCP server for Webstudio Cloud — generate, push, audit, and refactor Webstudio projects programmatically (for AI agents and CLI workflows).",
   "type": "module",
-  "main": "dist/index.js",
+  "main": "bundle/index.js",
   "bin": {
-    "webstudio-mcp": "dist/index.js"
+    "webstudio-mcp": "bundle/index.js"
   },
   "files": [
-    "dist",
+    "bundle",
     "docs",
     "README.md",
     "LICENSE",
     "CHANGELOG.md",
-    "SECURITY.md"
+    "SECURITY.md",
+    "THIRD_PARTY_NOTICES.md"
   ],
   "engines": {
     "node": ">=20"
@@ -21,11 +22,12 @@
   "scripts": {
     "clean": "node scripts/clean.mjs",
     "build": "npm run clean && tsc",
+    "bundle": "node scripts/bundle.mjs",
     "dev": "node --watch --loader ts-node/esm src/index.ts",
-    "start": "node dist/index.js",
+    "start": "node bundle/index.js",
     "test": "node --test test/*.test.mjs",
     "bump": "node scripts/bump.mjs",
-    "prepack": "npm run build"
+    "prepack": "npm run build && npm run bundle"
   },
   "keywords": [
     "webstudio",
@@ -47,19 +49,20 @@
   "bugs": {
     "url": "https://github.com/Densrt/webstudio-mcp/issues"
   },
-  "dependencies": {
-    "@modelcontextprotocol/sdk": "^1.0.0",
-    "acorn": "^8.11.0",
-    "acorn-walk": "^8.3.0",
-    "nanoid": "^5.0.0",
-    "node-html-parser": "^7.1.0",
-    "playwright-core": "^1.60.0",
-    "zod": "^3.22.0",
-    "zod-to-json-schema": "^3.25.2"
+  "optionalDependencies": {
+    "playwright-core": "^1.60.0"
   },
   "devDependencies": {
+    "@modelcontextprotocol/sdk": "^1.29.0",
     "@types/node": "^20.0.0",
+    "acorn": "^8.17.0",
+    "acorn-walk": "^8.3.5",
+    "esbuild": "^0.28.1",
+    "nanoid": "^5.1.11",
+    "node-html-parser": "^7.1.0",
     "ts-node": "^10.9.2",
-    "typescript": "^5.0.0"
+    "typescript": "^5.0.0",
+    "zod": "^3.25.76",
+    "zod-to-json-schema": "^3.25.2"
   }
 }

@@ -26,14 +26,19 @@ export type CollectionDef = {
 export type CmsItem = Record<string, unknown> & { id?: string | number };
 
 export type CmsAdapter = {
-  /** Adapter name (e.g. "directus", "wordpress:crs"). */
+  /** Adapter name (e.g. "directus", "wordpress:blog"). */
   name: string;
   /** List the collections available in the source. */
   listCollections(): Promise<string[]>;
   /** Discover the schema (fields + types) of a specific collection. */
   discoverSchema(collection: string): Promise<CollectionDef>;
-  /** List items with optional filter + pagination. */
-  listItems(collection: string, opts?: { filter?: Record<string, unknown>; limit?: number; offset?: number }): Promise<CmsItem[]>;
+  /**
+   * List items with optional filter + pagination. `fields` requests
+   * server-side projection where the backend supports it (WordPress _fields,
+   * Directus fields); adapters without support ignore it — the caller applies
+   * client-side projection as a fallback either way.
+   */
+  listItems(collection: string, opts?: { filter?: Record<string, unknown>; limit?: number; offset?: number; fields?: string[] }): Promise<CmsItem[]>;
   /** Create an item. Returns the created item with id. */
   createItem(collection: string, data: CmsItem): Promise<CmsItem>;
   /** Update an item by id. Returns the updated item. */
@@ -53,7 +58,7 @@ export { getN8nAdapter } from "./cms-adapters/n8n.js";
  * Resolve an adapter from a source descriptor:
  *   - "directus"            → Directus (~/.webstudio-mcp/cms/directus.json)
  *   - "wordpress"           → WordPress (single-site config) OR first site of multi-config
- *   - "wordpress:crs"       → WordPress for the named site "crs"
+ *   - "wordpress:blog"      → WordPress for the named site "blog"
  *   - "n8n"                 → n8n (single-instance)
  *   - "n8n:prod"            → n8n for the named instance "prod"
  */

@@ -117,7 +117,7 @@ if (toolFilter.active && toolFilter.keep.size === 0) {
 const handlers = new Map(TOOLS.map((t) => [t.definition.name, t.handler]));
 
 const SERVER_NAME = "webstudio";
-const SERVER_VERSION = "2.20.0";
+const SERVER_VERSION = "2.21.1";
 
 // MCP `instructions` — sent once at handshake (per the MCP spec, the host can
 // surface these to the model as a system-level preamble). Use it for cross-cutting
@@ -125,18 +125,29 @@ const SERVER_VERSION = "2.20.0";
 // every agent pays this token cost on connect.
 const SERVER_INSTRUCTIONS = `Webstudio MCP v${SERVER_VERSION} — workflow rules.
 
-1. **Discovery first.** Before building or pushing ANY section/component, call \`meta.guide({brief:"..."})\` — single-shot triage that returns the best pattern + matching high-level tool (e.g. desktop mega menu → \`navigation-menu-radix\` + \`build.create_navigation_menu\`). Alternatives: \`meta.index\` (tool catalog), \`meta.list_patterns\` (recipe slugs). Patterns are also exposed as MCP Resources (\`webstudio://patterns/<slug>\`). Guessing slugs (bento, mega-menu, sheet-mobile…) re-invents existing patterns.
-2. **Read before mutating styles.** Call \`styles.get_decls\` on the target instance(s) before \`styles.update\` / \`tokens.update_token_styles\`. \`read.inspect\` returns style SOURCES (names + ids), NOT the CSS values. Without get_decls you cannot reason about the cascade and will produce hacks (e.g. \`box-shadow: inset …\` to fake an overlay instead of \`backgroundImage\` layers — see pattern inline-bg-image-overlay).
-3. **Overlay over background image** → \`backgroundImage: { type:"layers", value:[gradient, image] }\` on the element itself. Do NOT nest absolute-positioned divs. Do NOT use \`box-shadow\` as an overlay.
-4. **Local vs token.** \`styles.update\` writes LOCAL overrides — for 2+ instances sharing decls, prefer \`tokens.create_tokens\` / \`tokens.update_token_styles\` then \`tokens.dedupe_locals\`. See pattern component-architecture.
-5. **Dry-run by default.** Most mutating tools default to \`dryRun: true\`. Inspect the patch list before pushing.
-6. **Images = native \`Image\` component.** \`src\` accepts an asset id, a URL string, or an expression — NEVER \`ws:element\` with \`tag:"img"\` (push paths auto-convert those). Upload via \`assets.upload\` first when possible (srcset + optimization). See pattern image-component.
+1. **Discovery first.** Before building or pushing ANY section/component, call \`meta.guide({brief:"..."})\` — returns the best pattern + matching high-level tool. Alternatives: \`meta.index\` (tool catalog), \`meta.list_patterns\` (recipe slugs). Guessing pattern slugs re-invents existing patterns.
+2. **Read before mutating styles.** Call \`styles.get_decls\` on the target instance(s) before \`styles.update\` / \`tokens.update_token_styles\`. \`read.inspect\` returns style SOURCES (names + ids), NOT CSS values — without get_decls you cannot reason about the cascade (pattern inline-bg-image-overlay).
+3. **Overlay over background image** → \`backgroundImage: { type:"layers", value:[gradient, image] }\` on the element itself. Do NOT nest absolute-positioned divs or fake it with \`box-shadow\`.
+4. **Local vs token.** \`styles.update\` writes LOCAL overrides — for 2+ instances sharing decls, prefer \`tokens.create_tokens\` / \`tokens.update_token_styles\` then \`tokens.dedupe_locals\` (pattern component-architecture).
+5. **Dry-run by default.** Most mutating tools default to \`dryRun: true\`. Inspect the patch list, then confirm pushes with \`build.push_staged({stageId})\` from the dry-run report — do NOT re-send the payload.
+6. **Images = native \`Image\` component.** \`src\` accepts an asset id, a URL string, or an expression — NEVER \`ws:element\` with \`tag:"img"\`. Upload via \`assets.upload\` first when possible (pattern image-component).
+7. **\`context\` policy.** Actions marked CRITICAL require \`context\`: 15-25 words, third person ("the caller wants…"), stating WHY. No PII (email/IP), no secrets (tokens/passwords/api keys), no first-person pronouns.
+8. **Full action docs** (params, redirections, example): \`meta.get_more_tools({brief:"<tool>.<action>"})\`.
 `;
+
+// WEBSTUDIO_MCP_RESOURCES=0 (v2.21.0) drops the MCP resources capability —
+// the 42-pattern listing costs ~6.6 kB per session, paid by EVERY connected
+// instance. A second (filtered) instance in the same client has no use for a
+// duplicate copy; patterns stay reachable in-band via meta.list_patterns /
+// meta.describe_pattern. Deliberately independent of WEBSTUDIO_MCP_TOOLS — no
+// implicit coupling between env vars; the README documents the recommended
+// read-only combo (WEBSTUDIO_MCP_TOOLS=readonly WEBSTUDIO_MCP_RESOURCES=0).
+const resourcesEnabled = process.env.WEBSTUDIO_MCP_RESOURCES !== "0";
 
 const server = new Server(
   { name: SERVER_NAME, version: SERVER_VERSION },
   {
-    capabilities: { tools: {}, resources: {} },
+    capabilities: resourcesEnabled ? { tools: {}, resources: {} } : { tools: {} },
     instructions: SERVER_INSTRUCTIONS,
   },
 );
@@ -151,20 +162,22 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
 
 // MCP resources — expose docs/patterns/*.md at webstudio://patterns/<slug>.
 // The LLM can cite a pattern passively (no tool call required) — Notion v2 / Linear pattern.
-server.setRequestHandler(ListResourcesRequestSchema, async () => ({
-  resources: listPatternResources().map((r) => ({
-    uri: r.uri,
-    name: r.name,
-    description: r.description,
-    mimeType: r.mimeType,
-  })),
-}));
+if (resourcesEnabled) {
+  server.setRequestHandler(ListResourcesRequestSchema, async () => ({
+    resources: listPatternResources().map((r) => ({
+      uri: r.uri,
+      name: r.name,
+      description: r.description,
+      mimeType: r.mimeType,
+    })),
+  }));
 
-server.setRequestHandler(ReadResourceRequestSchema, async (req) => {
-  const result = readPatternResource(req.params.uri);
-  if (!result) throw new Error(`Resource not found: ${req.params.uri}`);
-  return result;
-});
+  server.setRequestHandler(ReadResourceRequestSchema, async (req) => {
+    const result = readPatternResource(req.params.uri);
+    if (!result) throw new Error(`Resource not found: ${req.params.uri}`);
+    return result;
+  });
+}
 
 // Claude Code sometimes serializes arrays/objects/booleans/numbers as JSON strings inside MCP parameters.
 // We coerce string values back to their natural types before passing them to handlers.

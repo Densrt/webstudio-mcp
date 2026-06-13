@@ -5,6 +5,35 @@ privately before its first public release, so the history below starts at the fi
 public version. Format inspired by [Keep a Changelog](https://keepachangelog.com/),
 versioning per [SemVer](https://semver.org/).
 
+## [2.21.1] — 2026-06-13
+
+- chore(hygiene): anonymize shipped examples + tidy stale counts before release
+- docs(snapshot): comment reflects playwright-core as optionalDependency
+- feat(push): anti-wrong-project guard on push_staged + staged-push pattern doc
+- feat(push): staged push handles — confirm a dry-run without re-sending the payload
+- build(deps): playwright-core in optionalDependencies (snapshot works out-of-the-box)
+- chore: v2.21.0 — single-file bundle, zero runtime deps, presets, resources gating, CMS projection
+- feat(cms): field projection + bounded values on list_items; truncated mutation echoes
+- feat(surface): named filter presets + WEBSTUDIO_MCP_RESOURCES gating
+- feat!: zero runtime dependencies — playwright-core becomes optional
+- build: ship a single-file esbuild bundle as the npm artifact
+- refactor(patterns): unify docs/patterns resolution into lib/patterns-dir
+- chore: v2.20.3 — wire-schema diet: tools/list 98,885 -> 75,783 B (-23.4%)
+- perf(output): rate-limit repeated pedagogical hints (hint-once)
+- perf(wire): permissive StyleValue wire schema + trim oversized property prose
+- perf(wire): action summary cap 220 -> 110; bare enum lines; rewrite 73 leads
+- build(scripts): win32-safe path resolution in lint-descriptions + measure-baseline
+- perf(wire): hoist context/label/trailer boilerplate into SERVER_INSTRUCTIONS
+- fix(schema): default/examples-only diffs no longer fork anyOf; conflicting defaults dropped
+- chore(scripts): promote wire-payload measurement to scripts/measure-wire.mjs
+- chore: v2.20.2 — cache correctness (upload invalidation) + TTL 120s + frozen readonly reads + CRLF-safe patterns
+- perf(cache): readonly fetchBuild path — frozen shared reference, no per-hit clone
+- perf(cache): raise default build-cache TTL 30s -> 120s
+- test(auth): skip POSIX mode-bit assertion on win32
+- fix(patterns): normalize CRLF when reading pattern docs
+- fix(assets): invalidate build cache after upload POSTs
+- chore: v2.20.1 — fix(schema): conflicting per-action property shapes fork a nested anyOf
+
 ## [2.20.0] — 2026-06-10
 
 - feat(resources): method-aware create — form actions are standalone (no dataSource, no cache header)

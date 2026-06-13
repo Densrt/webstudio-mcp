@@ -130,7 +130,7 @@ To "undo" a binding, use `webstudio_update_page` with the field as a normal stri
 ## data-ws-show: the binding MUST be boolean (v2.19.0)
 
 A `data-ws-show` expression that resolves to a NUMBER leaks a literal "0" as text on the
-live page instead of hiding the element (cas réel: template multi-concess, 2026-06-10).
+live page instead of hiding the element (real case: a multi-tenant template, 2026-06-10).
 Push paths lint these bindings: a `….length` tail is auto-fixed to `….length > 0`
 (`coerce:show-binding-length`); any other non-boolean-shaped expression gets a warning
 (`detect:show-binding-not-boolean`). Always write an explicit boolean: `expr != null`,
